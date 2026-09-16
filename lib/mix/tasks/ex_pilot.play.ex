@@ -2,8 +2,9 @@ defmodule Mix.Tasks.ExPilot.Play do
   @shortdoc "Play ExPilot in this terminal, no ssh"
 
   @moduledoc """
-  Open the bundled arenas and run the client in this terminal, with sound through this
-  machine's speaker.
+  Offer every map under `priv/maps` (or `--maps`) as an arena and run the client in this
+  terminal, with sound through this machine's speaker. An arena's world starts when it is
+  joined.
 
       mix ex_pilot.play
       mix ex_pilot.play --maps priv/maps --name alice --robots 3
@@ -27,7 +28,7 @@ defmodule Mix.Tasks.ExPilot.Play do
 
     for path <- paths do
       id = path |> Path.basename() |> String.replace(~r/\.map(\.gz)?\z/, "") |> String.to_atom()
-      ExPilot.Arenas.open(id, path, Keyword.take(opts, [:robots]))
+      ExPilot.Arenas.register(id, path, Keyword.take(opts, [:robots]))
     end
 
     Drafter.run(Cauldron2D.Drafter.Client, props: %{game: ExPilot.Client, username: Keyword.get(opts, :name, "pilot")})

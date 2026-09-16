@@ -15,13 +15,20 @@ defmodule ExPilot.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger, :ssh, :inets, :ssl], mod: {ExPilot.Application, []}]
+    [extra_applications: [:logger, :ssh, :inets, :ssl, :crypto], mod: {ExPilot.Application, []}]
   end
 
   defp deps do
     [
       {:cauldron_2d, path: "../cauldron_2d"},
       {:cauldron_2d_drafter, path: "../cauldron_2d_drafter"},
+      {:cauldron_2d_web, path: "../cauldron_2d_web"},
+      {:phoenix, "~> 1.8"},
+      {:phoenix_live_view, "~> 1.2"},
+      {:phoenix_html, "~> 4.2"},
+      {:bandit, "~> 1.12"},
+      {:jason, "~> 1.4"},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:drafter, path: "../drafter"},
       {:french_curve, path: "../french_curve", override: true},
       {:linocut, path: "../linocut"},

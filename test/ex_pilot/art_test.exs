@@ -15,7 +15,7 @@ defmodule ExPilot.ArtTest do
     atlas = Art.build()
     arts = Atlas.arts(atlas)
 
-    for art <- [:wall, :wall_se, :wall_sw, :wall_ne, :wall_nw, :fuel, :base, :cannon_up, :cannon_left, :wormhole, :gravity, :treasure, :target, :shot, :spark, :debris, :shield] do
+    for art <- [:wall, :wall_se, :wall_sw, :wall_ne, :wall_nw, :fuel, :base_up, :base_down, :base_left, :base_right, :cannon_up, :cannon_left, :wormhole, :gravity, :treasure, :target, :shot, :spark, :debris, :shield] do
       assert art in arts, "missing #{art}"
     end
 
@@ -35,5 +35,17 @@ defmodule ExPilot.ArtTest do
              Shipshape.parse("(SH: 15,0 -8,8 -8,-8)")
 
     assert {:error, :no_outline} = Shipshape.parse("(EN: 1,1)")
+  end
+
+  test "a player's own shipshape is installed on first sight and drawn with the team's colour" do
+    Art.install()
+    shape = "(SH: 15,0 -8,8 -8,-8)(EN: -8,0)(MG: 15,0)"
+    art = Art.ship_shape(shape, 2, 5)
+    assert {:ship, {2, _}, 5} = art
+    atlas = Atlas.fetch(Art.name())
+    assert art in Atlas.arts(atlas)
+    assert Art.ship_shape(shape, 2, 5) == art
+    assert Art.ship_shape(nil, 2, 5) == Art.ship(2, 5)
+    assert Art.ship_shape("nonsense", 2, 5) == Art.ship(2, 5)
   end
 end

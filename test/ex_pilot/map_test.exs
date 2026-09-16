@@ -41,7 +41,7 @@ defmodule ExPilot.MapTest do
   end
 
   test "features are found with their tiles", %{arena: arena} do
-    assert Arena.bases(arena) == [%{pos: {2, 2}, team: nil}]
+    assert Arena.bases(arena) == [%{pos: {2, 2}, team: nil, dir: :up}]
     assert Arena.fuel(arena) == [{4, 2}]
     assert Arena.wormholes(arena) == [%{pos: {2, 3}, kind: :normal}]
     assert [%{pos: {5, 3}, kind: :attract}] = Arena.gravity_points(arena)
@@ -62,18 +62,40 @@ defmodule ExPilot.MapTest do
     assert Arena.option(dogfight, :edgewrap) == true
     assert length(Arena.bases(dogfight)) == 6
     assert Arena.grid(dogfight).({-1, 0}) == Arena.grid(dogfight).({119, 0})
+
+    for path <- Path.wildcard(Path.join(:code.priv_dir(:ex_pilot), "maps/*.map.gz")) do
+      assert {:ok, arena} = Arena.parse_file(path), "#{Path.basename(path)} does not load"
+      assert Arena.bases(arena) != [], "#{Path.basename(path)} has no base"
+    end
+  end
+
+  test "the feature lists are read from the parsed map, not scanned from its tiles", _ do
+    rows = for y <- 0..299, do: for(x <- 0..299, do: if(rem(x * y, 97) == 0, do: "x", else: " ")) |> Enum.join()
+    text = "mapwidth: 300\nmapheight: 300\nmapData: \\multiline: END\n" <> Enum.join(rows, "\n") <> "\nEND\n"
+    {:ok, big} = Arena.parse(text)
+
+    {us, _} = :timer.tc(fn -> for _ <- 1..1_000, do: {Arena.fuel(big), Arena.wormholes(big), Arena.treasures(big), Arena.bases(big)} end)
+    assert us < 200_000, "a thousand feature reads took #{div(us, 1000)} ms"
+  end
+
+  test "a base faces away from the wall it sits on: down under a ceiling, sideways off a wall, up by default", _ do
+    {:ok, arena} = Arena.parse("mapwidth: 7\nmapheight: 3\nmapData: \\multiline: END\n _x   x\n_   _x_\n   x  x\nEND\n")
+    assert Enum.map(Arena.bases(arena), &{&1.pos, &1.dir}) == [{{1, 0}, :down}, {{0, 1}, :right}, {{4, 1}, :left}, {{6, 1}, :up}]
+    assert Arena.art(arena, {1, 0}) == :base_down
+    assert Arena.art(arena, {0, 1}) == :base_right
+    assert Arena.art(arena, {4, 1}) == :base_left
   end
 
   test "team bases carry their team", _ do
     {:ok, arena} = Arena.parse("mapwidth: 4\nmapheight: 2\nmapData: \\multiline: END\n1 2 \nxxxx\nEND\n")
-    assert Arena.bases(arena) == [%{pos: {0, 0}, team: 1}, %{pos: {2, 0}, team: 2}]
+    assert Arena.bases(arena) == [%{pos: {0, 0}, team: 1, dir: :up}, %{pos: {2, 0}, team: 2, dir: :up}]
   end
 
   test "art for a tile", %{arena: arena} do
     assert Arena.art(arena, {1, 0}) == :wall
     assert Arena.art(arena, {0, 0}) == :wall_se
     assert Arena.art(arena, {4, 2}) == :fuel
-    assert Arena.art(arena, {2, 2}) == :base
+    assert Arena.art(arena, {2, 2}) == :base_up
     assert Arena.art(arena, {3, 1}) == nil
   end
 end
