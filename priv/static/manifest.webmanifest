@@ -1,0 +1,10 @@
+{
+  "name": "ExPilot",
+  "short_name": "ExPilot",
+  "start_url": "/lobby",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05060f",
+  "theme_color": "#05060f",
+  "icons": [{ "src": "/icon.png", "sizes": "180x180", "type": "image/png" }]
+}

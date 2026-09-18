@@ -13,7 +13,17 @@ config :ex_pilot, ExPilot.Web.Endpoint,
 
 config :phoenix, :json_library, Jason
 
+config :logger, level: :warning
+
+config :cauldron_2d, beacon_port: 2299
+
 if config_env() == :test do
-  config :ex_pilot, ExPilot.Web.Endpoint, http: [ip: {127, 0, 0, 1}, port: 4915], server: false
-  config :logger, level: :warning
+  config :ex_pilot, ExPilot.Web.Endpoint, http: [ip: {127, 0, 0, 1}, port: 4915], server: true
+
+  config :ex_pilot,
+    ledger:
+      Path.join(System.tmp_dir!(), "ex_pilot_test_ledger_#{System.os_time(:nanosecond)}.dets")
+
+  config :cauldron_2d, beacon_port: 22_990 + rem(System.os_time(:second), 1000)
+  config :logger, level: :error
 end

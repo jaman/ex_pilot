@@ -1,6 +1,9 @@
 defmodule ExPilot.ArenaTest do
   use ExUnit.Case, async: false
 
+  alias Cauldron2D.Arenas.Sweeper
+  alias Cauldron2D.Client.Hud
+  alias Cauldron2D.Grid.Coarse
   alias Cauldron2D.{Player, World}
   alias Drafter.Test, as: DT
   alias ExPilot.{Arenas, Robot}
@@ -8,17 +11,24 @@ defmodule ExPilot.ArenaTest do
   @fixture Path.join(__DIR__, "../fixtures/dogfight.map.gz")
 
   setup_all do
-    dir = Path.join(System.tmp_dir!(), "ex_pilot_arena_#{System.os_time(:nanosecond)}_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "ex_pilot_arena_#{System.os_time(:nanosecond)}_#{System.unique_integer([:positive])}"
+      )
+
     System.put_env("XDG_CACHE_HOME", dir)
     System.put_env("XDG_CONFIG_HOME", Path.join(dir, "config"))
     System.put_env("XDG_STATE_HOME", Path.join(dir, "state"))
     Code.ensure_loaded!(Cauldron2D.Drafter.Surface)
     Drafter.Widget.Registry.register(Cauldron2D.Drafter.Surface)
     ExPilot.Art.install()
+
     on_exit(fn ->
       Process.sleep(200)
       File.rm_rf(dir)
     end)
+
     :ok
   end
 
@@ -29,7 +39,9 @@ defmodule ExPilot.ArenaTest do
   end
 
   test "an open arena is listed with its robots seated and hidden from the player count" do
-    assert [%{id: :dogfight, name: "dogfight", players: 0, map: "Dogfight... 6 bases"}] = Arenas.list()
+    assert [%{id: :dogfight, name: "dogfight", players: 0, map: "Dogfight... 6 bases"}] =
+             Arenas.list()
+
     world = Arenas.world_name(:dogfight)
     assert Enum.sort(World.players(world)) == [{:robot, 1}, {:robot, 2}]
   end
@@ -38,20 +50,28 @@ defmodule ExPilot.ArenaTest do
     :ok = Arenas.register(:later, @fixture, robots: 1)
     on_exit(fn -> Arenas.close(:later) end)
 
-    assert %{id: :later, players: 0, map: "Dogfight... 6 bases"} = Enum.find(Arenas.list(), &(&1.id == :later))
+    assert %{id: :later, players: 0, map: "Dogfight... 6 bases"} =
+             Enum.find(Arenas.list(), &(&1.id == :later))
+
     refute Arenas.running?(:later)
 
     assert :ok == Player.join(Arenas.world_name(:later), "zed", %{username: "zed"})
     assert Arenas.running?(:later)
-    assert :ok == wait(fn -> Enum.sort(World.players(Arenas.world_name(:later))) == Enum.sort(["zed", {:robot, 1}]) end)
+
+    assert :ok ==
+             wait(fn ->
+               Enum.sort(World.players(Arenas.world_name(:later))) ==
+                 Enum.sort(["zed", {:robot, 1}])
+             end)
+
     assert %{players: 1} = Enum.find(Arenas.list(), &(&1.id == :later))
 
-    {:ok, sweeper} = Arenas.Sweeper.start_link(idle_after: 0, every: :never, name: nil)
-    Arenas.Sweeper.sweep(sweeper)
+    {:ok, sweeper} = Sweeper.start_link(idle_after: 0, every: :never, name: nil)
+    Sweeper.sweep(sweeper)
     assert Arenas.running?(:later), "a human is still in it"
 
     Player.leave(Arenas.world_name(:later), "zed")
-    Arenas.Sweeper.sweep(sweeper)
+    Sweeper.sweep(sweeper)
     refute Arenas.running?(:later)
     assert %{id: :later, players: 0} = Enum.find(Arenas.list(), &(&1.id == :later))
   end
@@ -85,8 +105,11 @@ defmodule ExPilot.ArenaTest do
 
     Player.leave(world, "one")
     Player.leave(world, "two")
-    {:ok, sweeper} = Arenas.Sweeper.start_link(idle_after: 3600, every: :never, name: nil)
-    Arenas.Sweeper.sweep(sweeper)
+
+    {:ok, sweeper} =
+      Sweeper.start_link(idle_after: 3600, every: :never, name: nil)
+
+    Sweeper.sweep(sweeper)
     assert :ok == wait(fn -> Enum.count(World.players(world), &match?({:robot, _}, &1)) == 5 end)
   end
 
@@ -96,18 +119,50 @@ defmodule ExPilot.ArenaTest do
     off_line = %{id: :alice, pos: {19.0, 13.0}, alive?: true, team: nil}
     far = %{id: :alice, pos: {24.0, 10.0}, alive?: true, team: nil}
 
-    ace = Robot.decide(%{me: me, ships: [me, off_line], shots: []}, grid, 0, skill: 1.0, tick: 3) |> elem(0)
+    ace =
+      Robot.decide(%{me: me, ships: [me, off_line], shots: []}, grid, 0, skill: 1.0, tick: 3)
+      |> elem(0)
+
     refute MapSet.member?(ace, :fire)
-    assert MapSet.member?(Robot.decide(%{me: me, ships: [me, far], shots: []}, grid, 0, skill: 1.0, tick: 3) |> elem(0), :fire)
 
-    novice = Robot.decide(%{me: me, ships: [me, off_line], shots: []}, grid, 0, skill: 0.3, tick: 3) |> elem(0)
+    assert MapSet.member?(
+             Robot.decide(%{me: me, ships: [me, far], shots: []}, grid, 0, skill: 1.0, tick: 3)
+             |> elem(0),
+             :fire
+           )
+
+    novice =
+      Robot.decide(%{me: me, ships: [me, off_line], shots: []}, grid, 0, skill: 0.3, tick: 3)
+      |> elem(0)
+
     assert MapSet.member?(novice, :fire)
-    refute MapSet.member?(Robot.decide(%{me: me, ships: [me, far], shots: []}, grid, 0, skill: 0.3, tick: 3) |> elem(0), :fire)
-    refute MapSet.member?(Robot.decide(%{me: me, ships: [me, off_line], shots: []}, grid, 0, skill: 0.3, tick: 0) |> elem(0), :fire)
 
-    assert Robot.cadence(1.0) == 3
-    assert Robot.cadence(0.3) == 9
-    assert Robot.skill() >= 0.3 and Robot.skill() <= 1.0
+    refute MapSet.member?(
+             Robot.decide(%{me: me, ships: [me, far], shots: []}, grid, 0, skill: 0.3, tick: 3)
+             |> elem(0),
+             :fire
+           )
+
+    refute MapSet.member?(
+             Robot.decide(%{me: me, ships: [me, off_line], shots: []}, grid, 0,
+               skill: 0.3,
+               tick: 0
+             )
+             |> elem(0),
+             :fire
+           )
+  end
+
+  test "as a Cauldron2D.Robot brain it remembers its burn and answers with held actions" do
+    memory = Robot.init(arena: :nowhere)
+    me = %{id: {:robot, 1}, pos: {10.0, 10.0}, heading: 0, alive?: true, team: nil, fuel: 900}
+    enemy = %{id: :alice, pos: {20.0, 10.0}, alive?: true, team: nil}
+    view = %{me: me, ships: [me, enemy], shots: [], arena: "nowhere", mode: :dogfight}
+    {%{held: held, aim: nil}, memory} = Robot.decide(view, memory, %{tick: 3, skill: 1.0})
+    assert MapSet.member?(held, :fire)
+    assert memory.burn == 0
+    assert Robot.gone?(%{view | me: nil})
+    refute Robot.gone?(view)
   end
 
   test "a robot low on fuel makes for a fuel station in sight, and hovers there" do
@@ -116,16 +171,35 @@ defmodule ExPilot.ArenaTest do
     enemy = %{id: :alice, pos: {20.0, 10.0}, alive?: true, team: nil}
     stations = [{10, 20}]
 
-    thirsty = Robot.decide(%{me: me, ships: [me, enemy], shots: []}, grid, 0, stations: stations) |> elem(0)
+    thirsty =
+      Robot.decide(%{me: me, ships: [me, enemy], shots: []}, grid, 0, stations: stations)
+      |> elem(0)
+
     assert MapSet.member?(thirsty, :turn_left) or MapSet.member?(thirsty, :turn_right)
 
-    full = Robot.decide(%{me: %{me | fuel: 900}, ships: [me, enemy], shots: []}, grid, 0, stations: stations) |> elem(0)
+    full =
+      Robot.decide(%{me: %{me | fuel: 900}, ships: [me, enemy], shots: []}, grid, 0,
+        stations: stations
+      )
+      |> elem(0)
+
     refute MapSet.member?(full, :turn_left) or MapSet.member?(full, :turn_right)
 
-    far = Robot.decide(%{me: me, ships: [me, enemy], shots: []}, grid, 0, stations: [{10, 60}]) |> elem(0)
+    far =
+      Robot.decide(%{me: me, ships: [me, enemy], shots: []}, grid, 0, stations: [{10, 60}])
+      |> elem(0)
+
     refute MapSet.member?(far, :turn_left) or MapSet.member?(far, :turn_right)
 
-    there = Robot.decide(%{me: Map.merge(me, %{pos: {10.4, 20.6}, vel: {0.0, 0.0}}), ships: [me], shots: []}, grid, 0, stations: stations) |> elem(0)
+    there =
+      Robot.decide(
+        %{me: Map.merge(me, %{pos: {10.4, 20.6}, vel: {0.0, 0.0}}), ships: [me], shots: []},
+        grid,
+        0,
+        stations: stations
+      )
+      |> elem(0)
+
     refute MapSet.member?(there, :thrust)
   end
 
@@ -134,15 +208,23 @@ defmodule ExPilot.ArenaTest do
     grid = ExPilot.Map.grid(arena)
     game = ExPilot.Game.init(arena: arena, seed: 7, lives: :unlimited)
     ids = for n <- 1..5, do: {:robot, n}
-    game = Enum.reduce(ids, game, fn id, game -> {:ok, game} = ExPilot.Game.join(game, id, %{username: inspect(id), robot?: true}); game end)
+
+    game =
+      Enum.reduce(ids, game, fn id, game ->
+        {:ok, game} = ExPilot.Game.join(game, id, %{username: inspect(id), robot?: true})
+        game
+      end)
 
     {game, _burns, told} =
-      Enum.reduce(1..3000, {game, Map.new(ids, &{&1, 0}), MapSet.new()}, fn tick, {game, burns, told} ->
+      Enum.reduce(1..3000, {game, Map.new(ids, &{&1, 0}), MapSet.new()}, fn tick,
+                                                                            {game, burns, told} ->
         {game, burns} =
           if rem(tick, 3) == 0 do
             Enum.reduce(ids, {game, burns}, fn id, {game, burns} ->
               {held, burn} = Robot.decide(ExPilot.Game.view(game, id), grid, burns[id])
-              {ExPilot.Game.handle_input(game, id, %{held: held, aim: nil}), Map.put(burns, id, burn)}
+
+              {ExPilot.Game.handle_input(game, id, %{held: held, aim: nil}),
+               Map.put(burns, id, burn)}
             end)
           else
             {game, burns}
@@ -154,8 +236,11 @@ defmodule ExPilot.ArenaTest do
 
     wall_deaths = Enum.count(told, fn {_, text} -> text =~ "hit a wall" end)
     collisions = Enum.count(told, fn {_, text} -> text =~ "collided" end)
-    deaths = ids |> Enum.map(&game.ships[&1].deaths) |> Enum.sum()
-    assert deaths <= 25, "#{deaths} deaths in a minute, #{wall_deaths} of them into walls, #{collisions} collisions"
+    deaths = ids |> Enum.map(&game.ships[&1].tally.deaths) |> Enum.sum()
+
+    assert deaths <= 25,
+           "#{deaths} deaths in a minute, #{wall_deaths} of them into walls, #{collisions} collisions"
+
     assert wall_deaths <= 2, "#{wall_deaths} deaths into walls in a minute"
   end
 
@@ -163,7 +248,10 @@ defmodule ExPilot.ArenaTest do
     world = Arenas.world_name(:dogfight)
     Process.sleep(1_500)
     snapshot = World.snapshot(world)
-    moved = Enum.any?(snapshot.ships, fn {_, ship} -> ship.body.vel != {0.0, 0.0} or not ship.alive? end)
+
+    moved =
+      Enum.any?(snapshot.ships, fn {_, ship} -> ship.body.vel != {0.0, 0.0} or not ship.alive? end)
+
     assert moved
   end
 
@@ -190,11 +278,66 @@ defmodule ExPilot.ArenaTest do
     refute MapSet.member?(held, :thrust)
   end
 
+  test "an enemy behind a wall is no target: the robot holds its fire and flies for the door" do
+    walls = MapSet.new(for y <- 0..29, y < 20, do: {15, y})
+
+    grid = fn {x, y} = cell ->
+      if x < 0 or y < 0 or x >= 30 or y >= 30 or MapSet.member?(walls, cell),
+        do: :solid,
+        else: :open
+    end
+
+    route = Coarse.new(grid, {30, 30})
+
+    me = %{
+      id: {:robot, 1},
+      pos: {10.0, 5.0},
+      heading: 0,
+      vel: {0.0, 0.0},
+      alive?: true,
+      team: nil,
+      fuel: 900
+    }
+
+    hidden = %{id: :alice, pos: {20.0, 5.0}, alive?: true, team: nil}
+
+    held =
+      Robot.decide(%{me: me, ships: [me, hidden], shots: []}, grid, 0, route: route) |> elem(0)
+
+    refute MapSet.member?(held, :fire)
+    assert MapSet.member?(held, :turn_right)
+
+    without_route = Robot.decide(%{me: me, ships: [me, hidden], shots: []}, grid)
+    refute MapSet.member?(without_route, :fire)
+    refute MapSet.member?(without_route, :turn_right) or MapSet.member?(without_route, :turn_left)
+
+    seen = %{hidden | pos: {20.0, 25.0}}
+    facing = %{me | pos: {10.0, 25.0}}
+
+    assert MapSet.member?(
+             Robot.decide(%{me: facing, ships: [facing, seen], shots: []}, grid, 0, route: route)
+             |> elem(0),
+             :fire
+           )
+  end
+
   test "a landed robot launches straight up out of its base pocket before hunting" do
     pocket = MapSet.new([{9, 10}, {11, 10}, {10, 11}])
     grid = fn cell -> if MapSet.member?(pocket, cell), do: :solid, else: :open end
     up = div(ExPilot.Ship.headings(), 4)
-    me = %{id: {:robot, 1}, pos: {10.5, 10.5}, heading: up, launch_heading: up, vel: {0.0, 0.0}, alive?: true, landed?: true, team: nil, fuel: 900}
+
+    me = %{
+      id: {:robot, 1},
+      pos: {10.5, 10.5},
+      heading: up,
+      launch_heading: up,
+      vel: {0.0, 0.0},
+      alive?: true,
+      landed?: true,
+      team: nil,
+      fuel: 900
+    }
+
     below = %{id: :alice, pos: {10.5, 30.0}, alive?: true, team: nil}
 
     held = Robot.decide(%{me: me, ships: [me, below], shots: []}, grid)
@@ -219,16 +362,34 @@ defmodule ExPilot.ArenaTest do
     assert held == MapSet.new([:thrust]), "keeps burning straight up until clear of the pocket"
     assert left == burn - 1
 
-    {held, 0} = Robot.decide(%{me: airborne, ships: [airborne, below], shots: []}, grid, 0)
-    refute held == MapSet.new([:thrust])
+    route = Coarse.new(grid, {40, 40})
+
+    {held, 0} =
+      Robot.decide(%{me: airborne, ships: [airborne, below], shots: []}, grid, 0, route: route)
+
+    refute held == MapSet.new([:thrust]),
+           "with the burn spent it hunts: the way round the pocket to the enemy below"
   end
 
   test "a robot whose enemy is behind a wall settles on the nearest clear heading instead of nosing into the wall" do
     walls = MapSet.new(for y <- 5..15, do: {12, y})
     grid = fn cell -> if MapSet.member?(walls, cell), do: :solid, else: :open end
-    me = %{id: {:robot, 1}, pos: {10.5, 10.5}, heading: 0, vel: {0.0, 0.0}, alive?: true, team: nil, fuel: 900}
+
+    me = %{
+      id: {:robot, 1},
+      pos: {10.5, 10.5},
+      heading: 0,
+      vel: {0.0, 0.0},
+      alive?: true,
+      team: nil,
+      fuel: 900
+    }
+
     enemy = %{id: :alice, pos: {20.0, 10.5}, alive?: true, team: nil}
-    decide = fn heading -> Robot.decide(%{me: %{me | heading: heading}, ships: [me, enemy], shots: []}, grid) end
+
+    decide = fn heading ->
+      Robot.decide(%{me: %{me | heading: heading}, ships: [me, enemy], shots: []}, grid)
+    end
 
     held = decide.(0)
     assert MapSet.member?(held, :turn_left) or MapSet.member?(held, :turn_right)
@@ -247,7 +408,16 @@ defmodule ExPilot.ArenaTest do
   test "a robot with a wall ahead turns toward the open side and brakes when drifting into it" do
     walls = MapSet.new(for x <- 8..12, y <- 8..12, x == 12 or y == 8, do: {x, y})
     grid = fn cell -> if MapSet.member?(walls, cell), do: :solid, else: :open end
-    me = %{id: {:robot, 1}, pos: {10.5, 10.5}, heading: 0, vel: {0.0, 0.0}, alive?: true, team: nil, fuel: 900}
+
+    me = %{
+      id: {:robot, 1},
+      pos: {10.5, 10.5},
+      heading: 0,
+      vel: {0.0, 0.0},
+      alive?: true,
+      team: nil,
+      fuel: 900
+    }
 
     held = Robot.decide(%{me: me, ships: [me], shots: []}, grid)
     assert MapSet.member?(held, :turn_right)
@@ -263,7 +433,12 @@ defmodule ExPilot.ArenaTest do
     ctx =
       DT.start_headless(
         Cauldron2D.Drafter.Client,
-        %{game: ExPilot.Client, username: "alice", sink: TuningFork.Sink.Silent, settings: %{display: :glyphs}},
+        %{
+          game: ExPilot.Client,
+          username: "alice",
+          sink: TuningFork.Sink.Silent,
+          settings: %{display: :glyphs}
+        },
         size: {100, 30}
       )
 
@@ -282,13 +457,25 @@ defmodule ExPilot.ArenaTest do
     refute DT.screen_text(ctx) =~ "Esc  lobby"
 
     lines = DT.screen_lines(ctx)
-    braille? = fn line -> line |> String.slice(0, 30) |> String.to_charlist() |> Enum.any?(&(&1 in 0x2800..0x28FF)) end
+
+    braille? = fn line ->
+      line |> String.slice(0, 30) |> String.to_charlist() |> Enum.any?(&(&1 in 0x2800..0x28FF))
+    end
+
     assert Enum.all?(Enum.take(lines, 12), braille?), "the radar fills the top of the left column"
     assert Enum.find_index(lines, &String.contains?(&1, "fuel")) >= 12
-    assert Enum.all?(lines, fn line -> not String.contains?(String.slice(line, 30..-1//1), "fuel") end), "the hud stays in the left column"
+
+    assert Enum.all?(lines, fn line ->
+             not String.contains?(String.slice(line, 30..-1//1), "fuel")
+           end),
+           "the hud stays in the left column"
 
     DT.send_key(ctx, :"?")
-    assert :ok == DT.wait_for(ctx, fn c -> DT.screen_text(c) =~ "s, mouse right  thrust" end, timeout: 3_000)
+
+    assert :ok ==
+             DT.wait_for(ctx, fn c -> DT.screen_text(c) =~ "s, mouse right  thrust" end,
+               timeout: 3_000
+             )
 
     Player.input(world, "alice", %{held: MapSet.new([:thrust]), aim: nil})
     Process.sleep(300)
@@ -305,9 +492,22 @@ defmodule ExPilot.ArenaTest do
     assert %{left: left, width: width, bottom: bottom} = ExPilot.Client.hud(view)
     assert width >= 28
     assert length(left) > 12
-    texts = Enum.map(left, &elem(&1, 1))
-    assert Enum.any?(Enum.drop(texts, 12), &(is_binary(&1) and String.contains?(&1, "bob")))
-    assert Enum.any?(texts, &(is_binary(&1) and String.starts_with?(&1, "scores")))
+
+    texts =
+      Enum.map(left, fn row ->
+        row |> Hud.runs() |> Enum.map_join(&elem(&1, 0))
+      end)
+
+    assert Enum.any?(Enum.drop(texts, 12), &String.contains?(&1, "bob"))
+    assert Enum.any?(texts, &String.starts_with?(&1, "scores"))
     assert is_list(bottom)
+    tags = Enum.map(left, &Hud.tag/1)
+    assert Enum.take(tags, 12) == List.duplicate(:radar, 12)
+    for tag <- [:name, :fuel, :score, :lives, :status, :items, :scores], do: assert(tag in tags)
+
+    assert :watching in Enum.map(
+             ExPilot.Client.hud(%{view | me: nil, watching: nil}).left,
+             &Hud.tag/1
+           )
   end
 end

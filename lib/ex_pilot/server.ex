@@ -1,24 +1,21 @@
 defmodule ExPilot.Server do
   @moduledoc """
-  Serve ExPilot over ssh.
+  Serve ExPilot: its maps as arenas, over ssh and to browsers, through
+  `Cauldron2D.Drafter.Server`.
 
       ExPilot.Server.start(port: 2222, maps: ["priv/maps/dogfight.map.gz"])
 
   Every map becomes an arena named after its file, its world starting on the first join
-  and stopping again after two minutes with nobody in it. The same worlds are served to
+  and stopping again after a while with nobody in it. The same worlds are served to
   browsers by `ExPilot.Web.Endpoint` on the `:http` port. Players register on first
-  connection as `new@host`, or on the web's login page. Each account is given its own sound port on the server —
-  24713 for the first account, 24714 for the next, and so on, kept in its props as
-  `:pulse_port` and shown in the game's settings; the game's audio goes as raw PCM
-  (`TuningFork.Sink.Tcp`) through the `ssh -R <port>:127.0.0.1:4713` tunnel to a player
-  program on the player's machine, and never through this machine's speaker.
+  connection as `new@host`, or on the web's login page; each account gets its own sound
+  port, as `Cauldron2D.Drafter.Server` gives them. A started server names its VM and
+  calls on the local network so other clients' connect screens list it.
 
   ## Options
 
     * `:port` — the ssh port. Default `2222`
-    * `:ip` — what to bind, as `Drafter.Server.start_ssh/2` takes it: an address, `{0, 0,
-      0, 0}` for every IPv4 interface, `{0, 0, 0, 0, 0, 0, 0, 0}` for every IPv6 one,
-      `:any` for both, or a list of these. Default `:any`
+    * `:ip` — what to bind, as `Drafter.Server.start_ssh/2` takes it. Default `:any`
     * `:accounts` — the account file. Default `$XDG_DATA_HOME/expilot/accounts.terms`,
       taking over an `ex_pilot_accounts.bin` in the working directory left by an older
       server
@@ -27,43 +24,78 @@ defmodule ExPilot.Server do
     * `:robots` — robots per arena. Default: each map's `maxrobots`
     * `:http` — the port of the web pages, on every IPv4 interface; `false` or `0` for
       none. Default: `PORT` in the environment, else 2280
+    * `:beacon`, `:beacon_port` — as `Cauldron2D.Drafter.Server` takes them
+    * `:music`, `:sfx` — the browsers' and desktops' sound, as `Cauldron2D.Net.Audio.set/1`
+      takes them: music `:personal` (default), `:arena`, `:dynamic`, `:static` or `:off`; effects
+      `:personal` (default) or `:off`. With `:static` the songs of `ExPilot.Music.Static` are
+      rendered at 44 100 Hz stereo as the server starts, in the background, unless they
+      are on disk from before, under `$XDG_CACHE_HOME/expilot/music`
   """
 
-  alias Cauldron2D.Drafter.Client
+  alias Cauldron2D.Client.Game
+  alias Cauldron2D.Drafter.Server
+  alias Cauldron2D.Net.Audio
   alias ExPilot.Arenas
+  alias ExPilot.Music.Static
 
-  @first_sound_port 24_713
+  @type t :: %{
+          required(:arenas) => [atom()],
+          required(:daemon) => term(),
+          required(:accounts) => pid(),
+          required(:http) => pos_integer() | nil,
+          optional(:node) => node() | nil,
+          optional(:beacon) => pid() | nil,
+          optional(:web) => module() | nil
+        }
 
-  @doc "Register the arenas and start the ssh daemon and the web endpoint; returns the daemon, the accounts server, the arenas and the web port."
-  @spec start(keyword()) :: {:ok, %{daemon: pid() | [pid()], accounts: pid(), arenas: [atom()], http: pos_integer() | nil}} | {:error, term()}
+  @doc "Register the arenas and start serving; see the module documentation for the options."
+  @spec start(keyword()) :: {:ok, t()} | {:error, term()}
   def start(opts \\ []) do
-    :ok = Application.ensure_started(:ssh) |> normalise()
-    Code.ensure_loaded!(Cauldron2D.Drafter.Surface)
-    Drafter.Widget.Registry.register(Cauldron2D.Drafter.Surface)
     ExPilot.Art.install()
 
-    {:ok, accounts} =
-      Drafter.Accounts.start_link(
-        path: Keyword.get_lazy(opts, :accounts, &accounts_path/0),
-        name: ExPilot.Accounts,
-        default_props: fn number -> %{pulse_port: @first_sound_port + number} end
-      )
-    arenas = open_arenas(Keyword.get_lazy(opts, :maps, &bundled_maps/0), Keyword.take(opts, [:robots]))
+    arenas =
+      open_arenas(Keyword.get_lazy(opts, :maps, &bundled_maps/0), Keyword.take(opts, [:robots]))
 
-    daemon_opts =
+    http = Keyword.get_lazy(opts, :http, &default_http/0)
+
+    server_opts =
       [
-        port: Keyword.get(opts, :port, 2222),
-        ip: Keyword.get(opts, :ip, :any),
-        auth: {:accounts, accounts},
-        register_as: "new",
-        tunnel: true,
-        mount_props: %{game: ExPilot.Client, accounts: accounts, speaker: false, served_by: %{host: hostname(), port: Keyword.get(opts, :port, 2222)}}
-      ] ++ Keyword.take(opts, [:system_dir])
+        game: ExPilot.Client,
+        accounts: Keyword.get_lazy(opts, :accounts, &accounts_path/0),
+        accounts_name: ExPilot.Accounts,
+        web: if(http in [false, 0], do: nil, else: {:ex_pilot, ExPilot.Web.Endpoint, http})
+      ] ++ Keyword.take(opts, [:port, :ip, :system_dir, :beacon, :beacon_port])
 
-    with {:ok, daemon} <- Drafter.Server.start_ssh(Client, daemon_opts),
-         {:ok, http} <- start_web(Keyword.get_lazy(opts, :http, &default_http/0)) do
-      {:ok, %{daemon: daemon, accounts: accounts, arenas: arenas, http: http}}
+    Audio.set(Keyword.take(opts, [:music, :sfx]))
+    if Keyword.get(opts, :music) == :static, do: prerender_static()
+
+    with {:ok, server} <- Server.start(server_opts) do
+      {:ok, Map.put(server, :arenas, arenas)}
     end
+  end
+
+  defp prerender_static do
+    pieces = ExPilot.Music.pieces()
+
+    for {name, _bpm, sections} <- Static.scores(), section <- Map.keys(sections) do
+      {_name, spec} = List.keyfind!(pieces, name, 0)
+
+      Task.start(fn ->
+        Cauldron2D.Audio.Music.render_static(name, spec, section, 44_100, 2,
+          dir: Game.music_dir(ExPilot.Client)
+        )
+      end)
+    end
+
+    :ok
+  end
+
+  @doc "Stop what `start/1` started, and the arenas' worlds; the arenas stay registered for the next start."
+  @spec stop(t()) :: :ok
+  def stop(%{arenas: arenas} = server) do
+    Server.stop(server)
+    Enum.each(arenas, &Arenas.stop/1)
+    :ok
   end
 
   @doc "The web port when none is given: `PORT` in the environment, else 2280."
@@ -72,20 +104,6 @@ defmodule ExPilot.Server do
     case System.get_env("PORT") do
       nil -> 2280
       port -> String.to_integer(port)
-    end
-  end
-
-  defp start_web(false), do: {:ok, nil}
-  defp start_web(0), do: {:ok, nil}
-
-  defp start_web(port) do
-    config = Application.get_env(:ex_pilot, ExPilot.Web.Endpoint, [])
-    Application.put_env(:ex_pilot, ExPilot.Web.Endpoint, Keyword.merge(config, http: [ip: {0, 0, 0, 0}, port: port], url: [host: hostname(), port: port], server: true))
-
-    case DynamicSupervisor.start_child(ExPilot.WebSupervisor, ExPilot.Web.Endpoint) do
-      {:ok, _pid} -> {:ok, port}
-      {:error, {:already_started, _pid}} -> {:ok, port}
-      {:error, reason} -> {:error, {:web, reason}}
     end
   end
 
@@ -98,9 +116,6 @@ defmodule ExPilot.Server do
     end
   end
 
-  defp normalise(:ok), do: :ok
-  defp normalise({:error, {:already_started, _}}), do: :ok
-
   @doc """
   The default account file, `$XDG_DATA_HOME/expilot/accounts.terms` (`~/.local/share`
   without the variable). When it does not exist and `legacy` does — an
@@ -109,8 +124,7 @@ defmodule ExPilot.Server do
   """
   @spec accounts_path(Path.t()) :: Path.t()
   def accounts_path(legacy \\ "ex_pilot_accounts.bin") do
-    base = System.get_env("XDG_DATA_HOME") || Path.join(System.user_home!(), ".local/share")
-    path = Path.join(base, "expilot/accounts.terms")
+    path = Cauldron2D.Paths.data(:expilot, "accounts.terms")
 
     if not File.exists?(path) and File.exists?(legacy) do
       File.mkdir_p!(Path.dirname(path))

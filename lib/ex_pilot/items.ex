@@ -17,7 +17,27 @@ defmodule ExPilot.Items do
   alias ExPilot.Ship
 
   @type kind ::
-          :fuel | :tank | :ecm | :armor | :mine | :missile | :cloak | :sensor | :wideangle | :rearshot | :afterburner | :transporter | :mirror | :deflector | :hyperjump | :phasing | :laser | :emergency_thrust | :emergency_shield | :tractor_beam | :autopilot
+          :fuel
+          | :tank
+          | :ecm
+          | :armor
+          | :mine
+          | :missile
+          | :cloak
+          | :sensor
+          | :wideangle
+          | :rearshot
+          | :afterburner
+          | :transporter
+          | :mirror
+          | :deflector
+          | :hyperjump
+          | :phasing
+          | :laser
+          | :emergency_thrust
+          | :emergency_shield
+          | :tractor_beam
+          | :autopilot
   @type item :: %{pos: {number(), number()}, kind: kind(), ttl: float()}
 
   @kinds [
@@ -82,7 +102,13 @@ defmodule ExPilot.Items do
   """
   @spec kit(Arena.t()) :: %{fuel: float(), items: %{kind() => non_neg_integer()}}
   def kit(%Arena{} = arena) do
-    items = for {kind, option} <- @initial, count = Arena.option(arena, option), count > 0, into: %{}, do: {kind, count}
+    items =
+      for {kind, option} <- @initial,
+          count = Arena.option(arena, option),
+          count > 0,
+          into: %{},
+          do: {kind, count}
+
     %{fuel: Arena.option(arena, :initialfuel) / 1, items: items}
   end
 
@@ -98,8 +124,17 @@ defmodule ExPilot.Items do
   count of it.
   """
   @spec pick_up(Ship.t(), kind()) :: Ship.t()
-  def pick_up(%Ship{} = ship, :fuel), do: %{ship | fuel: min(ship.max_fuel, ship.fuel + @fuel_pack)}
-  def pick_up(%Ship{} = ship, :tank), do: %{ship | max_fuel: ship.max_fuel + @tank_fuel, fuel: ship.fuel + @tank_fuel, items: count(ship.items, :tank)}
+  def pick_up(%Ship{} = ship, :fuel),
+    do: %{ship | fuel: min(ship.max_fuel, ship.fuel + @fuel_pack)}
+
+  def pick_up(%Ship{} = ship, :tank),
+    do: %{
+      ship
+      | max_fuel: ship.max_fuel + @tank_fuel,
+        fuel: ship.fuel + @tank_fuel,
+        items: count(ship.items, :tank)
+    }
+
   def pick_up(%Ship{} = ship, :armor), do: %{ship | armour: ship.armour + 1}
   def pick_up(%Ship{} = ship, kind), do: %{ship | items: count(ship.items, kind)}
 
@@ -142,7 +177,10 @@ defmodule ExPilot.Items do
   end
 
   defp appear(items, arena, rng, dt, options) do
-    weights = for {kind, option} <- @kinds, do: {kind, Map.fetch!(options, option) * Map.fetch!(options, :itemprobmult)}
+    weights =
+      for {kind, option} <- @kinds,
+          do: {kind, Map.fetch!(options, option) * Map.fetch!(options, :itemprobmult)}
+
     total = weights |> Enum.map(&elem(&1, 1)) |> Enum.sum()
     {roll, rng} = Rng.between(rng, 0, 1_000_000)
 
@@ -193,18 +231,24 @@ defmodule ExPilot.Items do
   def drop(items, _ship, prob, rng) when prob <= 0.0, do: {items, rng}
 
   def drop(items, %Ship{} = ship, prob, rng) do
-    carried = for {kind, count} <- Map.put(ship.items, :armor, ship.armour), _ <- 1..count//1, do: kind
+    carried =
+      for {kind, count} <- Map.put(ship.items, :armor, ship.armour), _ <- 1..count//1, do: kind
 
     Enum.reduce(carried, {items, rng}, fn kind, {acc, rng} ->
       {dropped?, rng} = Rng.chance(rng, round(prob * 1000), 1000)
-      if dropped?, do: {[%{pos: ship.body.pos, kind: kind, ttl: @lifetime} | acc], rng}, else: {acc, rng}
+
+      if dropped?,
+        do: {[%{pos: ship.body.pos, kind: kind, ttl: @lifetime} | acc], rng},
+        else: {acc, rng}
     end)
   end
 
   @doc "The item at `pos` within reach of a ship there, and the rest."
   @spec take_at([item()], {number(), number()}) :: {item() | nil, [item()]}
   def take_at(items, {x, y}) do
-    case Enum.split_with(items, fn %{pos: {ix, iy}} -> (ix - x) * (ix - x) + (iy - y) * (iy - y) < @reach * @reach end) do
+    case Enum.split_with(items, fn %{pos: {ix, iy}} ->
+           (ix - x) * (ix - x) + (iy - y) * (iy - y) < @reach * @reach
+         end) do
       {[found | others], rest} -> {found, others ++ rest}
       {[], rest} -> {nil, rest}
     end

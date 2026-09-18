@@ -1,6 +1,8 @@
 defmodule ExPilot.ServerTest do
   use ExUnit.Case, async: false
 
+  alias Cauldron2D.Client.Hud
+  alias Cauldron2D.Net.Audio
   alias Cauldron2D.World
   alias Drafter.Accounts
   alias ExPilot.Arenas
@@ -9,7 +11,12 @@ defmodule ExPilot.ServerTest do
   @fixture Path.join(__DIR__, "../fixtures/dogfight.map.gz")
 
   setup do
-    dir = Path.join(System.tmp_dir!(), "ex_pilot_server_#{System.os_time(:nanosecond)}_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "ex_pilot_server_#{System.os_time(:nanosecond)}_#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(dir)
     System.put_env("XDG_CONFIG_HOME", Path.join(dir, "config"))
     System.put_env("XDG_STATE_HOME", Path.join(dir, "state"))
@@ -17,20 +24,26 @@ defmodule ExPilot.ServerTest do
     File.cp!(@fixture, second)
     port = 39_000 + :rand.uniform(900)
 
-    {:ok, %{daemon: daemon, accounts: accounts}} =
-      ExPilot.Server.start(port: port, http: false, accounts: Path.join(dir, "accounts.bin"), maps: [@fixture, second], robots: 1)
+    {:ok, %{daemon: daemon, accounts: accounts} = server} =
+      ExPilot.Server.start(
+        port: port,
+        http: false,
+        accounts: Path.join(dir, "accounts.bin"),
+        maps: [@fixture, second],
+        robots: 1
+      )
 
     :ok = Accounts.register(accounts, "alice", "alices password", %{pulse_port: 24_901})
     :ok = Accounts.register(accounts, "bob", "bobs password", %{pulse_port: 24_901})
 
     on_exit(fn ->
-      :ssh.stop_daemon(daemon)
+      if Process.alive?(daemon), do: :ssh.stop_daemon(daemon)
       for id <- [:dogfight, :dogfight2], do: Arenas.close(id)
       if Process.alive?(accounts), do: GenServer.stop(accounts)
       File.rm_rf!(dir)
     end)
 
-    {:ok, port: port}
+    {:ok, port: port, server: server, dir: dir}
   end
 
   test "the accounts live under XDG data, and a file left in the working directory by an older server is carried over" do
@@ -42,8 +55,12 @@ defmodule ExPilot.ServerTest do
 
     previous = System.get_env("XDG_DATA_HOME")
     System.put_env("XDG_DATA_HOME", Path.join(dir, "data"))
+
     on_exit(fn ->
-      if previous, do: System.put_env("XDG_DATA_HOME", previous), else: System.delete_env("XDG_DATA_HOME")
+      if previous,
+        do: System.put_env("XDG_DATA_HOME", previous),
+        else: System.delete_env("XDG_DATA_HOME")
+
       File.rm_rf!(dir)
     end)
 
@@ -58,7 +75,13 @@ defmodule ExPilot.ServerTest do
       :ssh.connect(
         ~c"127.0.0.1",
         port,
-        [user: to_charlist(user), password: to_charlist(password), silently_accept_hosts: true, user_interaction: false, auth_methods: ~c"password"],
+        [
+          user: to_charlist(user),
+          password: to_charlist(password),
+          silently_accept_hosts: true,
+          user_interaction: false,
+          auth_methods: ~c"password"
+        ],
         5_000
       )
 
@@ -78,7 +101,10 @@ defmodule ExPilot.ServerTest do
     receive do
       {:ssh_cm, ^conn, {:data, ^channel, 0, data}} ->
         seen = seen <> data
-        if String.contains?(seen, marker), do: {:ok, seen}, else: collect_until(conn, channel, marker, seen)
+
+        if String.contains?(seen, marker),
+          do: {:ok, seen},
+          else: collect_until(conn, channel, marker, seen)
 
       {:ssh_cm, ^conn, _other} ->
         collect_until(conn, channel, marker, seen)
@@ -93,12 +119,19 @@ defmodule ExPilot.ServerTest do
     assert {:ok, _} = collect_until(conn, channel, "Arenas")
   end
 
-  test "two players log in as themselves at once, each with a reverse tunnel on the same port, and share a world", %{port: port} do
+  test "two players log in as themselves at once, each with a reverse tunnel on the same port, and share a world",
+       %{port: port} do
     alice = connect(port, "alice", "alices password")
     bob = connect(port, "bob", "bobs password")
-    assert {:ok, 24_901} = :ssh.tcpip_tunnel_from_server(alice, ~c"localhost", 24_901, ~c"localhost", 4_713)
-    assert {:error, _} = :ssh.tcpip_tunnel_from_server(bob, ~c"localhost", 24_901, ~c"localhost", 4_713)
-    assert {:ok, 24_902} = :ssh.tcpip_tunnel_from_server(bob, ~c"localhost", 24_902, ~c"localhost", 4_714)
+
+    assert {:ok, 24_901} =
+             :ssh.tcpip_tunnel_from_server(alice, ~c"localhost", 24_901, ~c"localhost", 4_713)
+
+    assert {:error, _} =
+             :ssh.tcpip_tunnel_from_server(bob, ~c"localhost", 24_901, ~c"localhost", 4_713)
+
+    assert {:ok, 24_902} =
+             :ssh.tcpip_tunnel_from_server(bob, ~c"localhost", 24_902, ~c"localhost", 4_714)
 
     alice_channel = open_shell(alice)
     bob_channel = open_shell(bob)
@@ -115,6 +148,70 @@ defmodule ExPilot.ServerTest do
 
     :ssh.close(alice)
     :ssh.close(bob)
+  end
+
+  test "a served session's sound goes to the account's port over TCP, the title offers the sound page, and a local session hears the speaker" do
+    assert {TuningFork.Sink.Tcp, opts} =
+             ExPilot.Client.sink(%{pulse_port: 24_901, served_by: %{host: "h", port: 1}})
+
+    assert opts[:port] == 24_901 and opts[:warm_up_ms] == 300
+    assert TuningFork.Sink.Silent == ExPilot.Client.sink(%{served_by: %{host: "h", port: 1}})
+    assert ExPilot.Client.sink(%{}) in [TuningFork.Sink.Speaker, TuningFork.Sink.Silent]
+
+    [%{key: :l}, page] =
+      ExPilot.Client.pages(%{
+        pulse_port: 24_901,
+        served_by: %{host: "arcade", port: 2222},
+        username: "alice"
+      })
+
+    assert page.key == :n and page.hint == "No sound?"
+
+    lines =
+      page.render.()
+      |> Enum.map(fn row ->
+        row |> Hud.runs() |> Enum.map_join(&elem(&1, 0))
+      end)
+
+    assert Enum.any?(lines, &(&1 =~ "ssh -p 2222 -R 24901:127.0.0.1:4713 alice@arcade"))
+    assert Enum.any?(lines, &(&1 =~ ~r/^\s*while :; do ffplay .*; done$/))
+    assert Enum.any?(lines, &(&1 =~ ~r/^\s*for \/L %i in \(1,0,2\) do ffplay /))
+    assert Enum.any?(lines, &(&1 =~ "winget")) and Enum.any?(lines, &(&1 =~ "brew"))
+    assert [%{key: :l}] = ExPilot.Client.pages(%{username: "alice"})
+
+    assert ExPilot.Client.refusal_text(:full) == "no base is free"
+    assert ExPilot.Client.player_label({:robot, 3}) == "Robot 3"
+    assert Enum.all?(ExPilot.Client.arenas(%{}), &match?({_, {_, _, _}}, &1.kind))
+  end
+
+  test "a server stops whole — ssh, web and accounts — and can start again on the same ports", %{
+    port: port,
+    server: server,
+    dir: dir
+  } do
+    assert :ok == ExPilot.Server.stop(server)
+    refute Process.alive?(server.accounts)
+    assert {:error, _} = :gen_tcp.connect(~c"127.0.0.1", port, [], 1_000)
+
+    http = 40_000 + :rand.uniform(900)
+    on_exit(fn -> Audio.set([]) end)
+
+    {:ok, again} =
+      ExPilot.Server.start(
+        port: port,
+        http: http,
+        accounts: Path.join(dir, "accounts.bin"),
+        maps: [@fixture],
+        robots: 0,
+        music: :arena,
+        sfx: :off
+      )
+
+    assert %{music: :arena, sfx: :off} = Audio.policy()
+    assert {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", http, [], 1_000)
+    :gen_tcp.close(socket)
+    assert :ok == ExPilot.Server.stop(again)
+    assert {:error, _} = :gen_tcp.connect(~c"127.0.0.1", http, [], 1_000)
   end
 
   test "the arrow keys move the lobby's selection over ssh", %{port: port} do

@@ -51,8 +51,15 @@ defmodule ExPilot.Map do
   alias Cauldron2D.Map, as: TileMap
 
   @type point :: {integer(), integer()}
-  @type feature :: %{pos: point(), kind: atom()} | %{pos: point(), team: integer() | nil} | %{pos: point(), facing: atom()}
-  @type t :: %__MODULE__{map: TileMap.t(), tiles: %{point() => atom() | {atom(), term()}}, features: map()}
+  @type feature ::
+          %{pos: point(), kind: atom()}
+          | %{pos: point(), team: integer() | nil}
+          | %{pos: point(), facing: atom()}
+  @type t :: %__MODULE__{
+          map: TileMap.t(),
+          tiles: %{point() => atom() | {atom(), term()}},
+          features: map()
+        }
 
   defstruct [:map, :tiles, :features]
 
@@ -144,16 +151,16 @@ defmodule ExPilot.Map do
     playersonradar: {:boolean, true}
   }
 
-  @doc "Parse map text; `{:error, reason}` as `Cauldron2D.Map.parse/1` gives it."
+  @doc "Parse map text (`edgewrap` wraps it); `{:error, reason}` as `Cauldron2D.Map.parse/2` gives it."
   @spec parse(String.t()) :: {:ok, t()} | {:error, term()}
   def parse(text) do
-    with {:ok, map} <- TileMap.parse(text), do: {:ok, build(map)}
+    with {:ok, map} <- TileMap.parse(text, wrap: "edgewrap"), do: {:ok, build(map)}
   end
 
   @doc "Read and parse a map file, gzipped or not."
   @spec parse_file(Path.t()) :: {:ok, t()} | {:error, term()}
   def parse_file(path) do
-    with {:ok, map} <- TileMap.parse_file(path), do: {:ok, build(map)}
+    with {:ok, map} <- TileMap.parse_file(path, wrap: "edgewrap"), do: {:ok, build(map)}
   end
 
   defp build(map) do
@@ -165,14 +172,22 @@ defmodule ExPilot.Map do
     ordered = Enum.sort_by(tiles, fn {{x, y}, _} -> {y, x} end)
 
     %{
-      bases: for({pos, {:base, team}} <- ordered, do: %{pos: pos, team: team, dir: base_dir(map, tiles, pos)}),
+      bases:
+        for(
+          {pos, {:base, team}} <- ordered,
+          do: %{pos: pos, team: team, dir: base_dir(map, tiles, pos)}
+        ),
       fuel: for({pos, :fuel} <- ordered, do: pos),
       cannons: for({pos, {:cannon, facing}} <- ordered, do: %{pos: pos, facing: facing}),
       wormholes: for({pos, {:wormhole, kind}} <- ordered, do: %{pos: pos, kind: kind}),
       gravity: for({pos, {:gravity, kind}} <- ordered, do: %{pos: pos, kind: kind}),
       treasures: for({pos, :treasure} <- ordered, do: pos),
       targets: for({pos, :target} <- ordered, do: pos),
-      checkpoints: ordered |> Enum.filter(&match?({_, {:checkpoint, _}}, &1)) |> Enum.sort_by(fn {_pos, {:checkpoint, n}} -> n end) |> Enum.map(&elem(&1, 0))
+      checkpoints:
+        ordered
+        |> Enum.filter(&match?({_, {:checkpoint, _}}, &1))
+        |> Enum.sort_by(fn {_pos, {:checkpoint, n}} -> n end)
+        |> Enum.map(&elem(&1, 0))
     }
   end
 
@@ -263,20 +278,20 @@ defmodule ExPilot.Map do
   @spec art(t(), point()) :: atom() | nil
   def art(%__MODULE__{map: map, tiles: tiles} = arena, point) do
     case tile(arena, point) do
-      nil -> nil
-      :wall -> :wall
-      {:half, corner} -> :"wall_#{corner}"
-      :fuel -> :fuel
       {:base, _team} -> :"base_#{base_dir(map, tiles, point)}"
-      {:cannon, facing} -> :"cannon_#{facing}"
-      {:wormhole, _kind} -> :wormhole
-      {:gravity, _kind} -> :gravity
-      :treasure -> :treasure
-      :target -> :target
-      :decor -> :wall
-      {:checkpoint, _n} -> :checkpoint
+      tile -> art_of(tile)
     end
   end
+
+  defp art_of(nil), do: nil
+  defp art_of(:wall), do: :wall
+  defp art_of(:decor), do: :wall
+  defp art_of({:half, corner}), do: :"wall_#{corner}"
+  defp art_of({:cannon, facing}), do: :"cannon_#{facing}"
+  defp art_of({:wormhole, _kind}), do: :wormhole
+  defp art_of({:gravity, _kind}), do: :gravity
+  defp art_of({:checkpoint, _n}), do: :checkpoint
+  defp art_of(tile) when tile in [:fuel, :treasure, :target], do: tile
 
   @doc """
   Bases, each `%{pos: {x, y}, team: team | nil, dir: dir}`, in map order.
@@ -326,7 +341,10 @@ defmodule ExPilot.Map do
   @doc "The `gravitypoint` option, `\"x,y\"` in blocks, as the centre of that block."
   @spec gravity_point(t()) :: {float(), float()}
   def gravity_point(%__MODULE__{} = arena) do
-    case arena |> option(:gravitypoint) |> String.split(",") |> Enum.map(&Float.parse(String.trim(&1))) do
+    case arena
+         |> option(:gravitypoint)
+         |> String.split(",")
+         |> Enum.map(&Float.parse(String.trim(&1))) do
       [{x, _}, {y, _}] -> {x + 0.5, y + 0.5}
       _ -> {0.5, 0.5}
     end

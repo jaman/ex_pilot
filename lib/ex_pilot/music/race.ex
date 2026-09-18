@@ -9,11 +9,11 @@ defmodule ExPilot.Music.Race do
 
   `circuit` is a D major drive: four-on-the-floor kick with open hats on the off-beats, a
   sixteenth-note arpeggiated electric bass, a pad changing chord every two bars through
-  I–V–vi–IV, and a square-wave hook that enters after an eight-bar intro, answers itself,
+  I–V–vi–IV, and a chiff-lead hook that enters after an eight-bar intro, answers itself,
   lifts through a middle eight, drops to hats and arpeggio, and returns.
 
   `overtake` is its B minor duel: a double-tresillo kick under a backbeat, a bass
-  alternating octaves in eighths, a sawtooth lead in eighth-note cells that climb by
+  alternating octaves in eighths, a distorted guitar lead in eighth-note cells that climb by
   sequence into a chromatic run, a suspended passage over `Asus` and `F#sus`, and the riff
   surging back; a two-bar fill closes every sixteen bars, and a crash opens every eight.
   """
@@ -32,12 +32,24 @@ defmodule ExPilot.Music.Race do
   @circuit_answer ["Bm", "G", "D", "A"]
   @circuit_lift ["G", "A", "F#m", "Bm"]
 
-  @overtake_riff [{"Bm", "b1", "b2"}, {"G", "g1", "g2"}, {"Em", "e1", "e2"}, {"F#7", "fs1", "fs2"}]
+  @overtake_riff [
+    {"Bm", "b1", "b2"},
+    {"G", "g1", "g2"},
+    {"Em", "e1", "e2"},
+    {"F#7", "fs1", "fs2"}
+  ]
   @overtake_climb [{"G", "g1", "g2"}, {"A", "a1", "a2"}, {"Bm", "b1", "b2"}, {"D", "d2", "d3"}]
-  @overtake_suspense [{"Asus", "a1", "a2"}, {"Asus", "a1", "a2"}, {"F#sus", "fs1", "fs2"}, {"F#7", "fs1", "fs2"}]
+  @overtake_suspense [
+    {"Asus", "a1", "a2"},
+    {"Asus", "a1", "a2"},
+    {"F#sus", "fs1", "fs2"},
+    {"F#7", "fs1", "fs2"}
+  ]
 
   @doc "The pieces, in the shape `ExPilot.Music.pieces/0` builds from."
-  @spec scores() :: [{String.t(), pos_integer(), %{atom() => {pos_integer(), %{atom() => String.t()}}}}]
+  @spec scores() :: [
+          {String.t(), pos_integer(), %{atom() => {pos_integer(), %{atom() => String.t()}}}}
+        ]
   def scores do
     [
       {"circuit", 128, %{cruise: circuit()}},
@@ -103,10 +115,12 @@ defmodule ExPilot.Music.Race do
      %{
        drums:
          ~s|s("#{drums}").bank("RolandTR909").gain("<.4!8 .6!24 .65!8 .35!8 .65!16>").superimpose(x => x.s("cr").struct("x ~ ~ ~").mask("#{crashes}").gain(.35))|,
-       bass: ~s|note("#{bass}").s("gm_electric_bass_finger").gain("<.35!8 .5!32 .45!8 .5!16>").clip(.5)|,
-       pad: ~s|chord("#{chords}").voicing().s("gm_pad_poly").attack(.4).release(1.5).gain("<.12!8 .16!24 .2!8 .08!8 .18!16>")|,
+       bass:
+         ~s|note("#{bass}").s("gm_electric_bass_finger").gain("<.35!8 .5!32 .45!8 .5!16>").clip(.5)|,
+       pad:
+         ~s|chord("#{chords}").voicing().s("gm_pad_poly").attack(.4).release(1.5).gain("<.12!8 .16!24 .2!8 .08!8 .18!16>")|,
        lead:
-         ~s|note("#{Score.cycles(["~!8", hook, hook, answer, lift, "~!8", hook, answer])}").s("gm_lead_1_square").clip(.8).release(.15).gain("<0!8 .4!24 .45!8 0!8 .45!16>")|
+         ~s|note("#{Score.cycles(["~!8", hook, hook, answer, lift, "~!8", hook, answer])}").s("gm_lead_4_chiff").clip(.8).release(.15).gain("<0!8 .36!24 .4!8 0!8 .4!16>")|
      }}
   end
 
@@ -172,9 +186,10 @@ defmodule ExPilot.Music.Race do
        drums:
          ~s|s("#{drums}").bank("RolandTR909").gain("<.65!16 .7!8 .45!6 .6 .7 .7!16>").superimpose(x => x.s("cr").struct("x ~ ~ ~").mask("<1 0!7>").gain(.35))|,
        bass: ~s|note("#{bass}").s("gm_electric_bass_pick").gain(.5).clip(.6).lpf(1000)|,
-       pad: ~s|chord("#{chords}").voicing().s("gm_synth_strings_1").attack(.1).release(.5).gain("<.14!16 .16!8 .2!8 .15!16>")|,
+       pad:
+         ~s|chord("#{chords}").voicing().s("gm_synth_strings_1").attack(.1).release(.5).gain("<.14!16 .16!8 .2!8 .15!16>")|,
        lead:
-         ~s|note("#{Score.cycles([riff, riff_run, climb, suspense, riff, riff_run])}").s("gm_lead_2_sawtooth").clip(.6).gain("<.65!16 .7!8 .55!8 .7!16>")|
+         ~s|note("#{Score.cycles([riff, riff_run, climb, suspense, riff, riff_run])}").s("gm_distortion_guitar").clip(.6).gain("<.4!16 .45!8 .35!8 .45!16>")|
      }}
   end
 
@@ -184,14 +199,18 @@ defmodule ExPilot.Music.Race do
 
   defp arpeggio(name) do
     {root, fifth, octave, third} = Map.fetch!(@circuit_arpeggios, name)
+
     "[#{root} #{octave} #{fifth} #{octave} #{root} #{octave} #{third} #{octave} #{root} #{octave} #{fifth} #{octave} #{root} #{octave} #{fifth} #{third}]"
   end
 
-  defp two_bar_named_chords(steps), do: Enum.map_join(steps, " ", fn {name, _low, _high} -> "#{name}!2" end)
+  defp two_bar_named_chords(steps),
+    do: Enum.map_join(steps, " ", fn {name, _low, _high} -> "#{name}!2" end)
 
-  defp octave_bars(steps, bar), do: Enum.map_join(steps, " ", fn {_name, low, high} -> "#{bar.(low, high)}!2" end)
+  defp octave_bars(steps, bar),
+    do: Enum.map_join(steps, " ", fn {_name, low, high} -> "#{bar.(low, high)}!2" end)
 
-  defp driving_octaves(low, high), do: "[#{low} #{high} #{low} #{high} #{low} #{high} #{low} #{high}]"
+  defp driving_octaves(low, high),
+    do: "[#{low} #{high} #{low} #{high} #{low} #{high} #{low} #{high}]"
 
   defp held_octaves(low, high), do: "[#{low}@3 #{high}@3 #{low}@2 #{high}@3 #{low}@3 #{high}@2]"
 end

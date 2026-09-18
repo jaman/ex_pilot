@@ -4,7 +4,17 @@ defmodule ExPilot.Music.Score do
 
       ExPilot.Music.Score.cycles(["Em!4 C!4", "G!4 D!4"])
       ExPilot.Music.Score.roots("<Em C G D>")
+      ExPilot.Music.Score.part("priv/scores/joplin_entertainer.mid", channel: 0, bars: 76)
   """
+
+  @doc """
+  A channel of the MIDI score at `path` as a `<…>` of four-beat cycles, one a bar, as
+  `TuningFork.Midi.mini/2` writes it and with the options it takes: `:channel`,
+  `:from`, `:bars`, `:voice`, `:on`, `:transpose`.
+  """
+  @spec part(Path.t(), keyword()) :: String.t()
+  def part(path, opts),
+    do: path |> TuningFork.Midi.read!() |> TuningFork.Midi.mini(opts) |> elem(1)
 
   @doc "The phrases as one `<…>` cycle list, one phrase per bar group in turn."
   @spec cycles([String.t()]) :: String.t()
@@ -16,7 +26,13 @@ defmodule ExPilot.Music.Score do
     String.replace(chords, ~r/([A-G])(#|b)?(m7|m|M7|9|7)?/, fn full -> root_of(full) <> octave end)
   end
 
-  @doc "A chord name's root as a Strudel note name: `\"C#m\"` is `\"cs\"`."
+  @doc ~S{A chord name's root as a Strudel note name: `"C#m"` is `"cs"`.}
   @spec root_of(String.t()) :: String.t()
-  def root_of(chord), do: chord |> String.replace(~r/(m7|m|M7|9|7)$/, "") |> String.replace("#", "s") |> String.replace("b", "f") |> String.downcase()
+  def root_of(chord),
+    do:
+      chord
+      |> String.replace(~r/(m7|m|M7|9|7)$/, "")
+      |> String.replace("#", "s")
+      |> String.replace("b", "f")
+      |> String.downcase()
 end

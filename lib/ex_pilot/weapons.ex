@@ -40,7 +40,12 @@ defmodule ExPilot.Weapons do
       id: id,
       owner: ship.id,
       kind: kind,
-      body: Body.new(pos: {x + dx * 0.8, y + dy * 0.8}, vel: {vx + dx * speed, vy + dy * speed}, radius: @missile_radius),
+      body:
+        Body.new(
+          pos: {x + dx * 0.8, y + dy * 0.8},
+          vel: {vx + dx * speed, vy + dy * speed},
+          radius: @missile_radius
+        ),
       life: @missile_life
     }
   end
@@ -48,7 +53,14 @@ defmodule ExPilot.Weapons do
   @doc "A mine dropped where `ship` is, armed after `fuse` seconds (a second by default)."
   @spec mine(Ship.t(), pos_integer(), float()) :: map()
   def mine(%Ship{} = ship, id, fuse \\ @mine_arm) do
-    %{id: id, owner: ship.id, kind: :mine, body: Body.new(pos: ship.body.pos, vel: {0.0, 0.0}, radius: @mine_radius), life: @mine_life, armed_in: fuse}
+    %{
+      id: id,
+      owner: ship.id,
+      kind: :mine,
+      body: Body.new(pos: ship.body.pos, vel: {0.0, 0.0}, radius: @mine_radius),
+      life: @mine_life,
+      armed_in: fuse
+    }
   end
 
   @doc "Whether `shot` is a mine that has had its second to arm."
@@ -69,8 +81,10 @@ defmodule ExPilot.Weapons do
 
   defp target(%{owner: owner, body: %{pos: pos}}, ships, kind) do
     ships
-    |> Enum.filter(fn ship -> ship.id != owner and ship.alive? and not ship.cloaked? end)
-    |> Enum.filter(fn ship -> kind == :smart or ship.thrusting? end)
+    |> Enum.filter(fn ship ->
+      ship.id != owner and ship.alive? and not ship.cloaked? and
+        (kind == :smart or ship.thrusting?)
+    end)
     |> Enum.min_by(fn ship -> Collision.distance_sq(pos, ship.body.pos) end, fn -> nil end)
   end
 
@@ -91,7 +105,8 @@ defmodule ExPilot.Weapons do
   living ship on the line within range, or `nil`, and `to` is where the beam stops — at
   that ship, at a wall, or at full range.
   """
-  @spec laser(Ship.t(), [Ship.t()], Collision.grid()) :: {Body.point(), Body.point(), Ship.t() | nil}
+  @spec laser(Ship.t(), [Ship.t()], Collision.grid()) ::
+          {Body.point(), Body.point(), Ship.t() | nil}
   def laser(%Ship{} = ship, ships, grid) do
     {dx, dy} = Body.direction(ship.body)
     {x, y} = ship.body.pos
@@ -100,14 +115,18 @@ defmodule ExPilot.Weapons do
     trace(from, {dx, dy}, @laser_step, others, grid, from)
   end
 
-  defp trace({fx, fy} = from, {dx, dy} = dir, travelled, ships, grid, at) when travelled <= @laser_range do
+  defp trace({fx, fy} = from, {dx, dy} = dir, travelled, ships, grid, at)
+       when travelled <= @laser_range do
     next = {fx + dx * travelled, fy + dy * travelled}
 
     cond do
       Collision.inside?(grid, next) ->
         {from, at, nil}
 
-      hit = Enum.find(ships, fn ship -> Collision.circles_overlap?(next, 0.05, ship.body.pos, Ship.radius()) end) ->
+      hit =
+          Enum.find(ships, fn ship ->
+            Collision.circles_overlap?(next, 0.05, ship.body.pos, Ship.radius())
+          end) ->
         {from, next, hit}
 
       true ->

@@ -8,7 +8,7 @@ defmodule ExPilot.Music.Ctf do
   the theme back in full brass to a cadence on F.
 
   `raid` (`:combat`, 140 bpm, 44 bars) plays while an enemy is within reach: the chase in
-  G minor — a driving kick and snare over a bass in eighths, a sawtooth theme that returns
+  G minor — a driving kick and snare over a bass in eighths, an overdriven guitar theme that returns
   a second time louder, a two-bar figure sequenced up through G minor, B flat, C minor and
   D, a breakdown of bare drums and bass ending in a snare roll, and the theme back at full
   force with a four-bar tail on D.
@@ -17,7 +17,9 @@ defmodule ExPilot.Music.Ctf do
   alias ExPilot.Music.Score
 
   @doc "The pieces, in the shape `ExPilot.Music.pieces/0` builds from."
-  @spec scores() :: [{String.t(), pos_integer(), %{atom() => {pos_integer(), %{atom() => String.t()}}}}]
+  @spec scores() :: [
+          {String.t(), pos_integer(), %{atom() => {pos_integer(), %{atom() => String.t()}}}}
+        ]
   def scores do
     [
       {"banner", 108, %{cruise: banner()}},
@@ -59,7 +61,16 @@ defmodule ExPilot.Music.Ctf do
         "[a5@3 g5 f5@2 d5@2, d5@2 e5@2 a4@2 f4@2] [bf4@2 d5@2 f5@2 g5@2, f4@4 bf4@2 c5@2] " <>
         "[e5@2 g5@2 c6@2 bf5@2, c5@2 e5@2 g5@2 e5@2] [a5@6 ~@2, c5@6 ~@2]"
 
-    lead = Score.cycles([call, horn_theme, horn_theme, trumpet_answer, quiet_turn, horn_theme, brass_coda])
+    lead =
+      Score.cycles([
+        call,
+        horn_theme,
+        horn_theme,
+        trumpet_answer,
+        quiet_turn,
+        horn_theme,
+        brass_coda
+      ])
 
     march = "[bd sd bd [sd sd sd sd], hh*8]"
     stride = "[bd [sd sd] bd sd, hh*8]"
@@ -106,7 +117,8 @@ defmodule ExPilot.Music.Ctf do
       "[d5 ~ d5 ef5 d5 bf4 g4@2] [bf4 c5 d5@2 ~ g4 a4 bf4] [f5 ~ f5 g5 f5 d5 bf4@2] [d5 ef5 f5@2 ~ bf4 c5 d5] " <>
         "[g5 ~ g5 af5 g5 ef5 c5@2] [ef5 f5 g5@2 ~ c5 d5 ef5] [a5 ~ a5 c6 a5 fs5 d5@2] [fs5 g5 a5@2 c6@2 a5 fs5]"
 
-    tail_riff = "[g5@2 f5@2 d5@2 bf4@2] [ef5 ~ ef5 g5 bf5@2 g5 ef5] [f5@3 ef5 d5@2 c5@2] [d5 ~ fs5 a5 fs5@2 ~@2]"
+    tail_riff =
+      "[g5@2 f5@2 d5@2 bf4@2] [ef5 ~ ef5 g5 bf5@2 g5 ef5] [f5@3 ef5 d5@2 c5@2] [d5 ~ fs5 a5 fs5@2 ~@2]"
 
     lead = Score.cycles([riff, riff, rising, "~!8", riff, tail_riff])
 
@@ -120,9 +132,12 @@ defmodule ExPilot.Music.Ctf do
      %{
        drums:
          ~s|s("<#{drive}!8 #{push}!7 [bd ~ sd ~ [sd sd] [sd sd] [sd sd] [sd sd], hh*8] #{open}!7 #{fill} #{bare}!6 [bd ~ bd ~, sd*8] [bd ~ ~ ~, sd*16] [cr ~ sd [~ bd] bd ~ sd ~, hh*8] #{push}!7 #{drive}!3 [bd sd [sd sd] bd [sd sd] [sd sd] [bd bd] cr]>").bank("RolandTR909").gain("<.65!8 .65!8 .7!8 .55!6 .6 .65 .7!12>")|,
-       bass: ~s|note("#{bass}").s("gm_electric_bass_pick").struct("x*8").gain("<.5!16 .55!8 .6!8 .55!12>").clip(.5).lpf(1000)|,
-       pad: ~s|chord("#{chords}").voicing().s("gm_synth_strings_1").attack(.05).release(.3).gain("<.14!8 .16!8 .18!8 0!8 .18!12>")|,
-       lead: ~s|note("#{lead}").s("gm_lead_2_sawtooth").clip(.7).lpf(2400).gain("<.5!8 .55!8 .6!8 0!8 .65!12>")|
+       bass:
+         ~s|note("#{bass}").s("gm_electric_bass_pick").struct("x*8").gain("<.5!16 .55!8 .6!8 .55!12>").clip(.5).lpf(1000)|,
+       pad:
+         ~s|chord("#{chords}").voicing().s("gm_synth_strings_1").attack(.05).release(.3).gain("<.14!8 .16!8 .18!8 0!8 .18!12>")|,
+       lead:
+         ~s|note("#{lead}").s("gm_overdriven_guitar").clip(.7).lpf(2400).gain("<.35!8 .4!8 .45!8 0!8 .45!12>")|
      }}
   end
 end

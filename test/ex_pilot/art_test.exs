@@ -5,7 +5,12 @@ defmodule ExPilot.ArtTest do
   alias ExPilot.{Art, Ship, Shipshape}
 
   setup_all do
-    dir = Path.join(System.tmp_dir!(), "ex_pilot_art_#{System.os_time(:nanosecond)}_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "ex_pilot_art_#{System.os_time(:nanosecond)}_#{System.unique_integer([:positive])}"
+      )
+
     System.put_env("XDG_CACHE_HOME", dir)
     on_exit(fn -> File.rm_rf!(dir) end)
     :ok
@@ -15,7 +20,28 @@ defmodule ExPilot.ArtTest do
     atlas = Art.build()
     arts = Atlas.arts(atlas)
 
-    for art <- [:wall, :wall_se, :wall_sw, :wall_ne, :wall_nw, :fuel, :base_up, :base_down, :base_left, :base_right, :cannon_up, :cannon_left, :wormhole, :gravity, :treasure, :target, :shot, :spark, :debris, :shield] do
+    for art <- [
+          :wall,
+          :wall_se,
+          :wall_sw,
+          :wall_ne,
+          :wall_nw,
+          :fuel,
+          :base_up,
+          :base_down,
+          :base_left,
+          :base_right,
+          :cannon_up,
+          :cannon_left,
+          :wormhole,
+          :gravity,
+          :treasure,
+          :target,
+          :shot,
+          :spark,
+          :debris,
+          :shield
+        ] do
       assert art in arts, "missing #{art}"
     end
 

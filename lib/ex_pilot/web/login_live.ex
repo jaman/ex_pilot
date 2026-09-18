@@ -6,12 +6,10 @@ defmodule ExPilot.Web.LoginLive do
   alias ExPilot.Web.Auth
 
   @impl true
-  def mount(_params, session, socket) do
-    case session do
-      %{"username" => username} when is_binary(username) -> {:ok, push_navigate(socket, to: "/lobby")}
-      _ -> {:ok, assign(socket, error: nil, registering: false)}
-    end
-  end
+  def mount(_params, %{"username" => username}, socket) when is_binary(username),
+    do: {:ok, push_navigate(socket, to: "/lobby")}
+
+  def mount(_params, _session, socket), do: {:ok, assign(socket, error: nil, registering: false)}
 
   @impl true
   def render(assigns) do
@@ -36,27 +34,32 @@ defmodule ExPilot.Web.LoginLive do
   end
 
   @impl true
-  def handle_event("toggle", _params, socket), do: {:noreply, assign(socket, registering: not socket.assigns.registering, error: nil)}
+  def handle_event("toggle", _params, socket),
+    do: {:noreply, assign(socket, registering: not socket.assigns.registering, error: nil)}
 
-  def handle_event("login", %{"username" => username, "password" => password}, socket) do
-    case Auth.login(username, password) do
-      {:ok, name} -> {:noreply, redirect(socket, to: "/session?token=" <> Auth.token(name))}
-      :error -> {:noreply, assign(socket, error: "no such name and password")}
-    end
-  end
+  def handle_event("login", %{"username" => username, "password" => password}, socket),
+    do: logged_in(Auth.login(username, password), socket)
 
-  def handle_event("register", %{"username" => username, "password" => password, "again" => again}, socket) do
-    cond do
-      password != again ->
-        {:noreply, assign(socket, error: "the passwords differ")}
+  def handle_event("register", %{"password" => password, "again" => again}, socket)
+      when password != again,
+      do: {:noreply, assign(socket, error: "the passwords differ")}
 
-      true ->
-        case Auth.register(username, password) do
-          {:ok, name} -> {:noreply, redirect(socket, to: "/session?token=" <> Auth.token(name))}
-          {:error, :taken} -> {:noreply, assign(socket, error: "that name is taken")}
-          {:error, :invalid_username} -> {:noreply, assign(socket, error: "a name is 1 to 32 letters, digits, _ or -")}
-          {:error, :weak_password} -> {:noreply, assign(socket, error: "a password is at least 8 characters")}
-        end
-    end
-  end
+  def handle_event("register", %{"username" => username, "password" => password}, socket),
+    do: registered(Auth.register(username, password), socket)
+
+  defp logged_in({:ok, name}, socket), do: {:noreply, to_session(socket, name)}
+
+  defp logged_in(:error, socket),
+    do: {:noreply, assign(socket, error: "no such name and password")}
+
+  defp registered({:ok, name}, socket), do: {:noreply, to_session(socket, name)}
+
+  defp registered({:error, reason}, socket),
+    do: {:noreply, assign(socket, error: refused(reason))}
+
+  defp refused(:taken), do: "that name is taken"
+  defp refused(:invalid_username), do: "a name is 1 to 32 letters, digits, _ or -"
+  defp refused(:weak_password), do: "a password is at least 8 characters"
+
+  defp to_session(socket, name), do: redirect(socket, to: "/session?token=" <> Auth.token(name))
 end

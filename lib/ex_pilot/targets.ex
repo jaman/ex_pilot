@@ -10,7 +10,12 @@ defmodule ExPilot.Targets do
 
   alias ExPilot.Map, as: Arena
 
-  @type target :: %{pos: {integer(), integer()}, team: integer() | nil, hits: non_neg_integer(), respawn_in: float()}
+  @type target :: %{
+          pos: {integer(), integer()},
+          team: integer() | nil,
+          hits: non_neg_integer(),
+          respawn_in: float()
+        }
 
   @hits 3
   @respawn 60.0
@@ -20,7 +25,9 @@ defmodule ExPilot.Targets do
   @spec new(Arena.t()) :: [target()]
   def new(%Arena{} = arena) do
     bases = Arena.bases(arena)
-    for pos <- Arena.targets(arena), do: %{pos: pos, team: team_near(bases, pos), hits: 0, respawn_in: 0.0}
+
+    for pos <- Arena.targets(arena),
+        do: %{pos: pos, team: team_near(bases, pos), hits: 0, respawn_in: 0.0}
   end
 
   defp team_near([], _pos), do: nil
@@ -41,7 +48,8 @@ defmodule ExPilot.Targets do
   Returns `{targets, outcome}`: `:hit`, `{:destroyed, team, points}` for the shooter's
   team, or `:none` when no standing target is there or it is the shooter's own.
   """
-  @spec hit([target()], {integer(), integer()}, integer() | nil) :: {[target()], :none | :hit | {:destroyed, integer() | nil, pos_integer()}}
+  @spec hit([target()], {integer(), integer()}, integer() | nil) ::
+          {[target()], :none | :hit | {:destroyed, integer() | nil, pos_integer()}}
   def hit(targets, cell, team) do
     case Enum.find_index(targets, &(&1.pos == cell and &1.respawn_in <= 0.0)) do
       nil ->
@@ -55,7 +63,8 @@ defmodule ExPilot.Targets do
             {targets, :none}
 
           target.hits + 1 >= @hits ->
-            {List.replace_at(targets, index, %{target | hits: 0, respawn_in: @respawn}), {:destroyed, team, @score}}
+            {List.replace_at(targets, index, %{target | hits: 0, respawn_in: @respawn}),
+             {:destroyed, team, @score}}
 
           true ->
             {List.replace_at(targets, index, %{target | hits: target.hits + 1}), :hit}
@@ -69,9 +78,11 @@ defmodule ExPilot.Targets do
 
   @doc "The cells of targets currently destroyed."
   @spec gone([target()]) :: MapSet.t()
-  def gone(targets), do: for(%{pos: pos, respawn_in: left} <- targets, left > 0.0, into: MapSet.new(), do: pos)
+  def gone(targets),
+    do: for(%{pos: pos, respawn_in: left} <- targets, left > 0.0, into: MapSet.new(), do: pos)
 
   @doc "Whether `team` has a target standing."
   @spec standing_for?([target()], integer() | nil) :: boolean()
-  def standing_for?(targets, team), do: Enum.any?(targets, &(&1.team == team and &1.respawn_in <= 0.0))
+  def standing_for?(targets, team),
+    do: Enum.any?(targets, &(&1.team == team and &1.respawn_in <= 0.0))
 end

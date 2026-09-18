@@ -44,8 +44,11 @@ defmodule ExPilot.Shipshape do
   @spec parse!(String.t()) :: t()
   def parse!(text) do
     case parse(text) do
-      {:ok, shape} -> shape
-      {:error, reason} -> raise ArgumentError, "bad shipshape #{inspect(text)}: #{inspect(reason)}"
+      {:ok, shape} ->
+        shape
+
+      {:error, reason} ->
+        raise ArgumentError, "bad shipshape #{inspect(text)}: #{inspect(reason)}"
     end
   end
 

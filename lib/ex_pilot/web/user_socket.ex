@@ -1,25 +1,12 @@
 defmodule ExPilot.Web.UserSocket do
   @moduledoc """
-  The player socket: a browser connects with the token its page was given at login,
-  and its channels carry the player's name and sound levels.
+  The player socket: a browser connects with the token its page was given at login and
+  the kind of client it is (`web` or `touch`), and its channels carry the player's name
+  and that kind's sound levels.
   """
 
-  use Phoenix.Socket
-
-  alias ExPilot.Web.Auth
-
-  channel "arena:*", ExPilot.Web.ArenaChannel
-
-  @impl true
-  def connect(%{"token" => token}, socket, _connect_info) do
-    case Auth.verify(token) do
-      {:ok, username} -> {:ok, socket |> assign(:username, username) |> assign(:settings, Auth.levels(username)) |> assign(:sheet_url, "/atlas.png")}
-      :error -> :error
-    end
-  end
-
-  def connect(_params, _socket, _connect_info), do: :error
-
-  @impl true
-  def id(socket), do: "player:" <> socket.assigns.username
+  use Cauldron2D.Net.Socket,
+    channel: ExPilot.Web.ArenaChannel,
+    verify: {ExPilot.Web.Auth, :connect},
+    topic: "arena"
 end

@@ -48,7 +48,8 @@ defmodule ExPilot.Art do
   the atlas the first time it is seen. `nil` or a shape that does not parse draws the
   default ship.
   """
-  @spec ship_shape(String.t() | nil, integer() | nil, non_neg_integer()) :: {:ship, term(), non_neg_integer()}
+  @spec ship_shape(String.t() | nil, integer() | nil, non_neg_integer()) ::
+          {:ship, term(), non_neg_integer()}
   def ship_shape(nil, team, heading), do: ship(team, heading)
 
   def ship_shape(shape, team, heading) do
@@ -71,13 +72,20 @@ defmodule ExPilot.Art do
 
       rasters =
         Linocut.Cache.fetch("ex_pilot/shape-#{hash}-#{team_index(team)}", fingerprint(), fn ->
-          Linocut.headings(outline, Ship.headings(), size: {@tile, @tile}, fill: colour, stroke: "#303030")
+          Linocut.headings(outline, Ship.headings(),
+            size: {@tile, @tile},
+            fill: colour,
+            stroke: "#303030"
+          )
         end)
 
       rasters
       |> Enum.with_index()
       |> Enum.reduce(atlas, fn {raster, heading}, acc ->
-        Atlas.put(acc, {:ship, key, heading}, raster, glyph: arrow(heading), color: Linocut.Palette.color(colour) |> Tuple.delete_at(3))
+        Atlas.put(acc, {:ship, key, heading}, raster,
+          glyph: arrow(heading),
+          color: Linocut.Palette.color(colour) |> Tuple.delete_at(3)
+        )
       end)
       |> Atlas.install()
     end
@@ -93,38 +101,123 @@ defmodule ExPilot.Art do
   def build do
     atlas =
       Atlas.new(name(), tile: @tile, void: {4, 5, 10})
-      |> Atlas.put(:space, Linocut.sprite(space(), space_palette()), glyph: "  ", color: {4, 5, 10})
+      |> Atlas.put(:space, Linocut.sprite(space(), space_palette()),
+        glyph: "  ",
+        color: {4, 5, 10}
+      )
       |> Atlas.put(:wall, Linocut.sprite(wall(), wall_palette()), glyph: "██", color: @wall_rgb)
       |> Atlas.put(:wall_se, half(:se), glyph: "◢█", color: @wall_rgb)
       |> Atlas.put(:wall_sw, half(:sw), glyph: "█◣", color: @wall_rgb)
       |> Atlas.put(:wall_ne, half(:ne), glyph: "◥█", color: @wall_rgb)
       |> Atlas.put(:wall_nw, half(:nw), glyph: "█◤", color: @wall_rgb)
-      |> Atlas.put(:fuel, Linocut.sprite(fuel(), fuel_palette()), glyph: "▓▓", color: {80, 220, 100})
-      |> Atlas.put(:base_up, Linocut.sprite(base(), base_palette()), glyph: "▁▁", color: {235, 235, 245})
-      |> Atlas.put(:base_down, Linocut.sprite(base(), base_palette()) |> flip_vertical(), glyph: "▔▔", color: {235, 235, 245})
-      |> Atlas.put(:base_left, Linocut.sprite(base(), base_palette()) |> rotate_left(), glyph: " ▕", color: {235, 235, 245})
-      |> Atlas.put(:base_right, Linocut.sprite(base(), base_palette()) |> rotate_right(), glyph: "▏ ", color: {235, 235, 245})
-      |> Atlas.put(:cannon_up, Linocut.sprite(cannon(), cannon_palette()), glyph: "╥╥", color: {200, 90, 90})
-      |> Atlas.put(:cannon_down, Linocut.sprite(cannon(), cannon_palette()) |> flip_vertical(), glyph: "╨╨", color: {200, 90, 90})
-      |> Atlas.put(:cannon_left, Linocut.sprite(cannon(), cannon_palette()) |> rotate_left(), glyph: "╡ ", color: {200, 90, 90})
-      |> Atlas.put(:cannon_right, Linocut.sprite(cannon(), cannon_palette()) |> rotate_right(), glyph: " ╞", color: {200, 90, 90})
-      |> Atlas.put(:wormhole, Linocut.sprite(wormhole(), wormhole_palette()), glyph: "◎ ", color: {170, 120, 255})
-      |> Atlas.put(:gravity, Linocut.sprite(gravity(), gravity_palette()), glyph: "·˚", color: {120, 120, 160})
-      |> Atlas.put(:treasure, Linocut.sprite(treasure(), treasure_palette()), glyph: "◆ ", color: {255, 210, 60})
-      |> Atlas.put(:target, Linocut.sprite(target(), target_palette()), glyph: "⊕ ", color: {255, 90, 90})
-      |> Atlas.put(:checkpoint, Linocut.sprite(target(), checkpoint_palette()), glyph: "◇ ", color: {120, 255, 120})
-      |> Atlas.put(:shot, Linocut.sprite(dot(), s: "#ffffff"), glyph: "· ", color: {255, 255, 255})
-      |> Atlas.put(:spark, Linocut.sprite(dot(), s: "#ffb040"), glyph: "· ", color: {255, 176, 64})
-      |> Atlas.put(:debris, Linocut.sprite(dot(), s: "#ff6040"), glyph: "· ", color: {255, 96, 64})
-      |> Atlas.put(:shield, Linocut.outline(ring(), size: {@tile, @tile}, stroke: "#70e0ff"), glyph: "()", color: {112, 224, 255})
-      |> Atlas.put(:target_gone, Linocut.sprite(target(), r: "#5a3030"), glyph: "⊗ ", color: {90, 48, 48})
-      |> Atlas.put(:ball, Linocut.outline(ring(), size: {@tile, @tile}, fill: "#ffb040", stroke: "#ffe0a0", scale: 3.0), glyph: "● ", color: {255, 176, 64})
-      |> Atlas.put(:mine, Linocut.sprite(mine(), M: "#c04040", m: "#602020"), glyph: "✱ ", color: {192, 64, 64})
-      |> Atlas.put(:torpedo, Linocut.sprite(missile(), m: "#f0f0f0"), glyph: "➤ ", color: {240, 240, 240})
-      |> Atlas.put(:smart, Linocut.sprite(missile(), m: "#60ff80"), glyph: "➤ ", color: {96, 255, 128})
-      |> Atlas.put(:heat, Linocut.sprite(missile(), m: "#ff6060"), glyph: "➤ ", color: {255, 96, 96})
+      |> Atlas.put(:fuel, Linocut.sprite(fuel(), fuel_palette()),
+        glyph: "▓▓",
+        color: {80, 220, 100}
+      )
+      |> Atlas.put(:base_up, Linocut.sprite(base(), base_palette()),
+        glyph: "▁▁",
+        color: {235, 235, 245}
+      )
+      |> Atlas.put(:base_down, Linocut.sprite(base(), base_palette()) |> flip_vertical(),
+        glyph: "▔▔",
+        color: {235, 235, 245}
+      )
+      |> Atlas.put(:base_left, Linocut.sprite(base(), base_palette()) |> rotate_left(),
+        glyph: " ▕",
+        color: {235, 235, 245}
+      )
+      |> Atlas.put(:base_right, Linocut.sprite(base(), base_palette()) |> rotate_right(),
+        glyph: "▏ ",
+        color: {235, 235, 245}
+      )
+      |> Atlas.put(:cannon_up, Linocut.sprite(cannon(), cannon_palette()),
+        glyph: "╥╥",
+        color: {200, 90, 90}
+      )
+      |> Atlas.put(:cannon_down, Linocut.sprite(cannon(), cannon_palette()) |> flip_vertical(),
+        glyph: "╨╨",
+        color: {200, 90, 90}
+      )
+      |> Atlas.put(:cannon_left, Linocut.sprite(cannon(), cannon_palette()) |> rotate_left(),
+        glyph: "╡ ",
+        color: {200, 90, 90}
+      )
+      |> Atlas.put(:cannon_right, Linocut.sprite(cannon(), cannon_palette()) |> rotate_right(),
+        glyph: " ╞",
+        color: {200, 90, 90}
+      )
+      |> Atlas.put(:wormhole, Linocut.sprite(wormhole(), wormhole_palette()),
+        glyph: "◎ ",
+        color: {170, 120, 255}
+      )
+      |> Atlas.put(:gravity, Linocut.sprite(gravity(), gravity_palette()),
+        glyph: "·˚",
+        color: {120, 120, 160}
+      )
+      |> Atlas.put(:treasure, Linocut.sprite(treasure(), treasure_palette()),
+        glyph: "◆ ",
+        color: {255, 210, 60}
+      )
+      |> Atlas.put(:target, Linocut.sprite(target(), target_palette()),
+        glyph: "⊕ ",
+        color: {255, 90, 90}
+      )
+      |> Atlas.put(:checkpoint, Linocut.sprite(target(), checkpoint_palette()),
+        glyph: "◇ ",
+        color: {120, 255, 120}
+      )
+      |> Atlas.put(:shot, Linocut.sprite(dot(), s: "#ffffff"),
+        glyph: "· ",
+        color: {255, 255, 255}
+      )
+      |> Atlas.put(:spark, Linocut.sprite(dot(), s: "#ffb040"),
+        glyph: "· ",
+        color: {255, 176, 64}
+      )
+      |> Atlas.put(:debris, Linocut.sprite(dot(), s: "#ff6040"),
+        glyph: "· ",
+        color: {255, 96, 64}
+      )
+      |> Atlas.put(:shield, Linocut.outline(ring(), size: {@tile, @tile}, stroke: "#70e0ff"),
+        glyph: "()",
+        color: {112, 224, 255}
+      )
+      |> Atlas.put(:target_gone, Linocut.sprite(target(), r: "#5a3030"),
+        glyph: "⊗ ",
+        color: {90, 48, 48}
+      )
+      |> Atlas.put(
+        :ball,
+        Linocut.outline(ring(),
+          size: {@tile, @tile},
+          fill: "#ffb040",
+          stroke: "#ffe0a0",
+          scale: 3.0
+        ),
+        glyph: "● ",
+        color: {255, 176, 64}
+      )
+      |> Atlas.put(:mine, Linocut.sprite(mine(), M: "#c04040", m: "#602020"),
+        glyph: "✱ ",
+        color: {192, 64, 64}
+      )
+      |> Atlas.put(:torpedo, Linocut.sprite(missile(), m: "#f0f0f0"),
+        glyph: "➤ ",
+        color: {240, 240, 240}
+      )
+      |> Atlas.put(:smart, Linocut.sprite(missile(), m: "#60ff80"),
+        glyph: "➤ ",
+        color: {96, 255, 128}
+      )
+      |> Atlas.put(:heat, Linocut.sprite(missile(), m: "#ff6060"),
+        glyph: "➤ ",
+        color: {255, 96, 96}
+      )
       |> Atlas.put(:beam, Linocut.sprite(dot(), s: "#ff60ff"), glyph: "· ", color: {255, 96, 255})
-      |> Atlas.put(:string, Linocut.sprite(dot(), s: "#c0a060"), glyph: "· ", color: {192, 160, 96})
+      |> Atlas.put(:string, Linocut.sprite(dot(), s: "#c0a060"),
+        glyph: "· ",
+        color: {192, 160, 96}
+      )
       |> put_items()
 
     Enum.reduce(@teams, atlas, &put_ship_headings(&2, &1))
@@ -161,11 +254,16 @@ defmodule ExPilot.Art do
   defp put_items(atlas) do
     Enum.reduce(@item_colours, atlas, fn {kind, colour}, acc ->
       {r, g, b, _} = Linocut.Palette.color(colour)
-      Atlas.put(acc, {:item, kind}, Linocut.sprite(item_box(), b: colour, x: "#202030"), glyph: item_glyph(kind), color: {r, g, b})
+
+      Atlas.put(acc, {:item, kind}, Linocut.sprite(item_box(), b: colour, x: "#202030"),
+        glyph: item_glyph(kind),
+        color: {r, g, b}
+      )
     end)
   end
 
-  defp item_glyph(kind), do: kind |> Atom.to_string() |> String.first() |> String.upcase() |> Kernel.<>(" ")
+  defp item_glyph(kind),
+    do: kind |> Atom.to_string() |> String.first() |> String.upcase() |> Kernel.<>(" ")
 
   defp item_box do
     """
@@ -236,17 +334,27 @@ defmodule ExPilot.Art do
 
     rasters =
       Linocut.Cache.fetch("ex_pilot/ship-#{team_index(team)}", fingerprint(), fn ->
-        Linocut.headings(outline, Ship.headings(), size: {@tile, @tile}, fill: colour, stroke: "#303030")
+        Linocut.headings(outline, Ship.headings(),
+          size: {@tile, @tile},
+          fill: colour,
+          stroke: "#303030"
+        )
       end)
 
     rasters
     |> Enum.with_index()
     |> Enum.reduce(atlas, fn {raster, heading}, acc ->
-      Atlas.put(acc, ship(team, heading), raster, glyph: arrow(heading), color: Linocut.Palette.color(colour) |> Tuple.delete_at(3))
+      Atlas.put(acc, ship(team, heading), raster,
+        glyph: arrow(heading),
+        color: Linocut.Palette.color(colour) |> Tuple.delete_at(3)
+      )
     end)
   end
 
-  defp fingerprint, do: :erlang.phash2({Shipshape.default(), @tile, Ship.headings(), @team_colours}) |> Integer.to_string()
+  defp fingerprint,
+    do:
+      :erlang.phash2({Shipshape.default(), @tile, Ship.headings(), @team_colours})
+      |> Integer.to_string()
 
   defp arrow(heading) do
     eighth = rem(round(heading * 8 / Ship.headings()), 8)
@@ -271,7 +379,9 @@ defmodule ExPilot.Art do
   defp rotate_right(raster), do: transform(raster, fn {x, y} -> {@tile - 1 - y, x} end)
 
   defp transform(raster, fun) do
-    for y <- 0..(@tile - 1), x <- 0..(@tile - 1), reduce: FrenchCurve.Raster.new(@tile, @tile, background: {0, 0, 0, 0}) do
+    for y <- 0..(@tile - 1),
+        x <- 0..(@tile - 1),
+        reduce: FrenchCurve.Raster.new(@tile, @tile, background: {0, 0, 0, 0}) do
       acc ->
         {sx, sy} = fun.({x, y})
         FrenchCurve.Raster.put_pixel(acc, x, y, FrenchCurve.Raster.get_pixel(raster, sx, sy))
@@ -302,7 +412,7 @@ defmodule ExPilot.Art do
     """
   end
 
-  defp wall_palette, do: ["#": "#5a7cf0", ".": "#3450b4"]
+  defp wall_palette, do: ["#": "#5a7cf0", .: "#3450b4"]
 
   defp fuel do
     """

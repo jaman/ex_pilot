@@ -2,7 +2,8 @@ defmodule ExPilot.Game do
   @moduledoc """
   The rules of ExPilot as one pure value, run by `Cauldron2D.World`.
 
-  Ships turn, thrust, fire and shield on held actions; gravity from the map and its
+  Ships turn, thrust, fire and shield on held actions — thrust as hard as the input's
+  `strength` says, its exhaust as long; gravity from the map and its
   points pulls on them; a wall bounces a ship, at a cost in fuel, unless the ship hits it
   unshielded faster than `@wall_crash_speed`, which is a crash; fuel
   stations refill a ship near them; wormholes move a ship elsewhere; cannons on the map
@@ -66,8 +67,8 @@ defmodule ExPilot.Game do
 
   alias Cauldron2D.{Body, Collision, Particles, Rng}
   alias Cauldron2D.Collision.Buckets
-  alias ExPilot.Map, as: Arena
   alias ExPilot.{Ball, Gear, Items, Race, Ship, Targets, Weapons}
+  alias ExPilot.Map, as: Arena
 
   @type t :: %__MODULE__{}
 
@@ -90,7 +91,8 @@ defmodule ExPilot.Game do
             lasered: [],
             messages: [],
             team_bonus: %{},
-            round_over_in: nil
+            round_over_in: nil,
+            won_by: nil
 
   @turn_rate 60.0
   @thrust 14.0
@@ -125,6 +127,10 @@ defmodule ExPilot.Game do
     * `:seed` — for the game's own randomness. Default: unique
     * `:lives` — lives per ship, or `:unlimited`. Default: the map's `limitedlives` and
       `worldlives`
+    * `:only` — the names allowed to fly; anyone else may only watch (`:not_invited`).
+      Default: everyone
+    * `:first_to` — a duel: the first ship to that many kills in the round wins it, the
+      match is over for good, and `outcome/1` tells both sides. Default: none
   """
   @impl true
   def init(opts) do
@@ -145,6 +151,8 @@ defmodule ExPilot.Game do
           shot_speed: Arena.option(arena, :shotspeed) * 50 / 35,
           shot_life: Arena.option(arena, :shotlife) / 50,
           lives: Keyword.get(opts, :lives, lives_option(arena)),
+          only: Keyword.get(opts, :only),
+          first_to: Keyword.get(opts, :first_to),
           teamplay?: Arena.option(arena, :teamplay),
           team_immunity?: Arena.option(arena, :teamimmunity),
           max_shots: Arena.option(arena, :maxplayershots),
@@ -160,7 +168,8 @@ defmodule ExPilot.Game do
           shots_bounce?: Arena.option(arena, :shotswallbounce),
           shots_gravity?: Arena.option(arena, :shotsgravity),
           drag: @drag + friction_drag(Arena.option(arena, :friction)),
-          killing?: Arena.option(arena, :allowplayerkilling) and Arena.option(arena, :playerkillings),
+          killing?:
+            Arena.option(arena, :allowplayerkilling) and Arena.option(arena, :playerkillings),
           crashes?: Arena.option(arena, :allowplayercrashes),
           ship_bounces?: Arena.option(arena, :allowplayerbounces),
           bounce_keep: Arena.option(arena, :playerwallbouncebrakefactor) / 1,
@@ -174,16 +183,20 @@ defmodule ExPilot.Game do
           shielded_mining?: Arena.option(arena, :shieldedmining),
           balls_bounce?: Arena.option(arena, :ballswallbounce),
           players_on_radar?: Arena.option(arena, :playersonradar),
-          mode: mode(arena)
+          mode: if(is_integer(Keyword.get(opts, :first_to)), do: :duel, else: mode(arena))
         })
     }
   end
 
   @doc """
   What kind of arena a map makes: `:ctf` (teams and treasures), `:race`, `:team` (teams
-  without treasures) or `:dogfight` (everyone for themselves).
+  without treasures) or `:dogfight` (everyone for themselves); a game with `first_to`
+  is a `:duel`.
   """
-  @spec mode(Arena.t()) :: :ctf | :race | :team | :dogfight
+  @spec mode(Arena.t() | t()) :: :ctf | :race | :team | :dogfight | :duel
+  def mode(%__MODULE__{settings: %{first_to: kills}}) when is_integer(kills), do: :duel
+  def mode(%__MODULE__{arena: arena}), do: mode(arena)
+
   def mode(%Arena{} = arena) do
     cond do
       Arena.option(arena, :racemode) -> :race
@@ -198,8 +211,16 @@ defmodule ExPilot.Game do
   defp friction_drag(friction), do: -:math.log(1.0 - friction) * 50
 
   defp item_options(arena) do
-    options = for kind <- Items.kinds(), option = Items.option(kind), into: %{}, do: {option, Arena.option(arena, option)}
-    Map.merge(options, %{itemprobmult: Arena.option(arena, :itemprobmult), maxitemdensity: Arena.option(arena, :maxitemdensity)})
+    options =
+      for kind <- Items.kinds(),
+          option = Items.option(kind),
+          into: %{},
+          do: {option, Arena.option(arena, option)}
+
+    Map.merge(options, %{
+      itemprobmult: Arena.option(arena, :itemprobmult),
+      maxitemdensity: Arena.option(arena, :maxitemdensity)
+    })
   end
 
   defp load(%Arena{} = arena), do: arena
@@ -210,7 +231,9 @@ defmodule ExPilot.Game do
   end
 
   defp lives_option(arena) do
-    if Arena.option(arena, :limitedlives), do: max(1, Arena.option(arena, :worldlives)), else: :unlimited
+    if Arena.option(arena, :limitedlives),
+      do: max(1, Arena.option(arena, :worldlives)),
+      else: :unlimited
   end
 
   defp fields(arena) do
@@ -220,7 +243,10 @@ defmodule ExPilot.Game do
     uniform =
       if Arena.option(arena, :gravitypointsource),
         do: %{strength: strength, kind: {:toward, Arena.gravity_point(arena)}},
-        else: %{strength: strength, kind: {:uniform, {exact(-:math.cos(angle)), exact(:math.sin(angle))}}}
+        else: %{
+          strength: strength,
+          kind: {:uniform, {exact(-:math.cos(angle)), exact(:math.sin(angle))}}
+        }
 
     points =
       for %{pos: {x, y}, kind: kind} <- Arena.gravity_points(arena) do
@@ -238,18 +264,38 @@ defmodule ExPilot.Game do
   end
 
   defp point_field(_pos, :up), do: %{strength: @point_gravity / 10, kind: {:uniform, {0.0, -1.0}}}
-  defp point_field(_pos, :down), do: %{strength: @point_gravity / 10, kind: {:uniform, {0.0, 1.0}}}
-  defp point_field(_pos, :left), do: %{strength: @point_gravity / 10, kind: {:uniform, {-1.0, 0.0}}}
-  defp point_field(_pos, :right), do: %{strength: @point_gravity / 10, kind: {:uniform, {1.0, 0.0}}}
+
+  defp point_field(_pos, :down),
+    do: %{strength: @point_gravity / 10, kind: {:uniform, {0.0, 1.0}}}
+
+  defp point_field(_pos, :left),
+    do: %{strength: @point_gravity / 10, kind: {:uniform, {-1.0, 0.0}}}
+
+  defp point_field(_pos, :right),
+    do: %{strength: @point_gravity / 10, kind: {:uniform, {1.0, 0.0}}}
 
   @impl true
   def join(%__MODULE__{} = game, id, props) do
     cond do
       Map.get(props, :spectate, false) ->
-        {:ok, %{game | watchers: Map.put(game.watchers, id, %{focus: centre(game), held: MapSet.new(), watching: nil})}}
+        {:ok,
+         %{
+           game
+           | watchers:
+               Map.put(game.watchers, id, %{
+                 focus: centre(game),
+                 held: MapSet.new(),
+                 watching: nil
+               })
+         }}
 
       Map.has_key?(game.ships, id) ->
         {:error, :already_joined}
+
+      game.settings.only != nil and
+        Map.get(props, :username, name_of(id)) not in game.settings.only and
+          not Map.get(props, :robot?, false) ->
+        {:error, :not_invited}
 
       true ->
         case seat(game, props) do
@@ -291,14 +337,21 @@ defmodule ExPilot.Game do
 
   defp evict_robot(game, props) do
     wanted = wanted_team(props)
-    robots = game.ships |> Map.values() |> Enum.filter(& &1.robot?) |> Enum.sort_by(& &1.name, :desc)
 
-    case Enum.find(robots, fn robot -> wanted == nil or robot.team == nil or robot.team == wanted end) do
+    robots =
+      game.ships |> Map.values() |> Enum.filter(& &1.robot?) |> Enum.sort_by(& &1.name, :desc)
+
+    case Enum.find(robots, fn robot ->
+           wanted == nil or robot.team == nil or robot.team == wanted
+         end) do
       nil ->
         nil
 
       robot ->
-        freed = %{game | ships: Map.delete(game.ships, robot.id)} |> tell("#{robot.name} made room for #{Map.get(props, :username, "a player")}")
+        freed =
+          %{game | ships: Map.delete(game.ships, robot.id)}
+          |> tell("#{robot.name} made room for #{Map.get(props, :username, "a player")}")
+
         {freed, Enum.find(Arena.bases(game.arena), &(&1.pos == robot.base))}
     end
   end
@@ -328,6 +381,16 @@ defmodule ExPilot.Game do
 
   @impl true
   def leave(%__MODULE__{} = game, id) do
+    game =
+      case Map.fetch(game.ships, id) do
+        {:ok, ship} ->
+          {row, _ship} = Ship.result(ship, false)
+          emit(game, {:result, Map.put(row, :mode, mode(game))})
+
+        :error ->
+          game
+      end
+
     %{game | ships: Map.delete(game.ships, id), watchers: Map.delete(game.watchers, id)}
   end
 
@@ -335,27 +398,61 @@ defmodule ExPilot.Game do
   def handle_input(%__MODULE__{} = game, id, %{held: held} = input) do
     case {Map.fetch(game.ships, id), Map.fetch(game.watchers, id)} do
       {{:ok, ship}, _} ->
-        watching = if pressed?(held, ship.held, :next_watch), do: next_watch(game, id, watched(game, ship)), else: ship.watching
-        %{game | ships: Map.put(game.ships, id, %{ship | held: held, aim: Map.get(input, :aim), watching: watching})}
+        watching =
+          if pressed?(held, ship.held, :next_watch),
+            do: next_watch(game, id, watched(game, ship)),
+            else: ship.watching
+
+        %{
+          game
+          | ships:
+              Map.put(game.ships, id, %{
+                ship
+                | held: held,
+                  aim: Map.get(input, :aim),
+                  strength: Map.get(input, :strength, %{}),
+                  watching: watching
+              })
+        }
 
       {:error, {:ok, watcher}} ->
-        watching = if pressed?(held, watcher.held, :next_watch), do: next_watch(game, id, chosen(game, watcher.watching)), else: watcher.watching
-        %{game | watchers: Map.put(game.watchers, id, %{watcher | held: held, watching: watching})}
+        watching =
+          if pressed?(held, watcher.held, :next_watch),
+            do: next_watch(game, id, chosen(game, watcher.watching)),
+            else: watcher.watching
+
+        %{
+          game
+          | watchers: Map.put(game.watchers, id, %{watcher | held: held, watching: watching})
+        }
 
       _ ->
         game
     end
   end
 
-  defp pressed?(held, before, action), do: MapSet.member?(held, action) and not MapSet.member?(before, action)
+  defp pressed?(held, before, action),
+    do: MapSet.member?(held, action) and not MapSet.member?(before, action)
 
   defp next_watch(game, id, current) do
-    flying = game.ships |> Map.values() |> Enum.filter(&(&1.id != id and &1.alive?)) |> Enum.sort_by(& &1.name)
+    flying =
+      game.ships
+      |> Map.values()
+      |> Enum.filter(&(&1.id != id and &1.alive?))
+      |> Enum.sort_by(& &1.name)
 
     case {flying, current} do
-      {[], _} -> nil
-      {_, nil} -> hd(flying).id
-      {_, %{id: current_id}} -> Enum.at(flying, rem((Enum.find_index(flying, &(&1.id == current_id)) || -1) + 1, length(flying))).id
+      {[], _} ->
+        nil
+
+      {_, nil} ->
+        hd(flying).id
+
+      {_, %{id: current_id}} ->
+        Enum.at(
+          flying,
+          rem((Enum.find_index(flying, &(&1.id == current_id)) || -1) + 1, length(flying))
+        ).id
     end
   end
 
@@ -373,6 +470,7 @@ defmodule ExPilot.Game do
     %{game | beams: [], lasered: []}
     |> Map.update!(:time, &(&1 + dt))
     |> fly_ships(dt)
+    |> count_contact(dt)
     |> collide_ships()
     |> strike_lasered()
     |> fly_shots(dt)
@@ -393,12 +491,20 @@ defmodule ExPilot.Game do
   defp roll_balls(%{balls: []} = game, _dt), do: game
 
   defp roll_balls(game, dt) do
-    env = %{grid: Arena.grid(game.arena), fields: game.fields, size: Arena.size(game.arena), wrap?: game.settings.wrap?, bounce?: game.settings.balls_bounce?}
+    env = %{
+      grid: Arena.grid(game.arena),
+      fields: game.fields,
+      size: Arena.size(game.arena),
+      wrap?: game.settings.wrap?,
+      bounce?: game.settings.balls_bounce?
+    }
+
     {balls, ships} = Ball.step(game.balls, game.ships, dt, env)
     ships = Enum.reduce(balls, ships, fn ball, ships -> pair_ball(ships, ball) end)
     {balls, scored} = Ball.deliver(balls, ships, game.arena)
 
-    Enum.reduce(scored, %{game | balls: balls, ships: ships}, fn {carrier, team, points, against}, acc ->
+    Enum.reduce(scored, %{game | balls: balls, ships: ships}, fn {carrier, team, points, against},
+                                                                 acc ->
       acc
       |> award(carrier, team, points)
       |> Map.update!(:ships, &Map.update!(&1, carrier, fn ship -> %{ship | ball: nil} end))
@@ -422,34 +528,51 @@ defmodule ExPilot.Game do
   end
 
   defp award(game, scorer, team, points) do
-    ships = Map.update!(game.ships, scorer, fn ship -> %{ship | score: ship.score + points} end)
-    bonus = if team, do: Map.update(game.team_bonus, team, points, &(&1 + points)), else: game.team_bonus
+    ships = Map.update!(game.ships, scorer, &put_in(&1.tally.score, &1.tally.score + points))
+
+    bonus =
+      if team,
+        do: Map.update(game.team_bonus, team, points, &(&1 + points)),
+        else: game.team_bonus
+
     %{game | ships: ships, team_bonus: bonus}
   end
 
-  defp tell(game, text), do: %{game | messages: Enum.take([{game.time, text} | game.messages], @messages_kept)}
+  defp tell(game, text),
+    do: %{game | messages: Enum.take([{game.time, text} | game.messages], @messages_kept)}
 
   defp collide_ships(%{settings: %{crashes?: false, ship_bounces?: false}} = game), do: game
 
   defp collide_ships(game) do
-    flying = game.ships |> Map.values() |> Enum.filter(&(&1.alive? and not Gear.phasing?(&1, game.time))) |> Enum.sort_by(& &1.name)
+    flying =
+      game.ships
+      |> Map.values()
+      |> Enum.filter(&(&1.alive? and not Gear.phasing?(&1, game.time)))
+      |> Enum.sort_by(& &1.name)
 
-    for {first, index} <- Enum.with_index(flying), second <- Enum.drop(flying, index + 1), reduce: game do
-      acc ->
-        case {Map.get(acc.ships, first.id), Map.get(acc.ships, second.id)} do
-          {%{alive?: true} = one, %{alive?: true} = other} ->
-            if Collision.circles_overlap?(one.body.pos, Ship.radius(), other.body.pos, Ship.radius()), do: collide(acc, one, other), else: acc
-
-          _ ->
-            acc
-        end
+    for {first, index} <- Enum.with_index(flying),
+        second <- Enum.drop(flying, index + 1),
+        reduce: game do
+      acc -> collide_if_touching(acc, Map.get(acc.ships, first.id), Map.get(acc.ships, second.id))
     end
   end
+
+  defp collide_if_touching(game, %{alive?: true} = one, %{alive?: true} = other) do
+    if Collision.circles_overlap?(one.body.pos, Ship.radius(), other.body.pos, Ship.radius()),
+      do: collide(game, one, other),
+      else: game
+  end
+
+  defp collide_if_touching(game, _one, _other), do: game
 
   defp collide(game, one, other) do
     {one, other} = if game.settings.ship_bounces?, do: rebound(one, other), else: {one, other}
     game = %{game | ships: game.ships |> Map.put(one.id, one) |> Map.put(other.id, other)}
-    guarded = fn ship -> Gear.shielded?(ship, game.time) or ship.deflecting? or immune?(ship, game.time) end
+
+    guarded = fn ship ->
+      Gear.shielded?(ship, game.time) or ship.deflecting? or immune?(ship, game.time)
+    end
+
     dying = if game.settings.crashes?, do: Enum.reject([one, other], guarded), else: []
 
     case dying do
@@ -457,7 +580,9 @@ defmodule ExPilot.Game do
         emit(game, {:bounce, one.body.pos})
 
       lost ->
-        Enum.reduce(lost, game, fn ship, acc -> lose(acc, Map.fetch!(acc.ships, ship.id), "#{one.name} and #{other.name} collided") end)
+        Enum.reduce(lost, game, fn ship, acc ->
+          lose(acc, Map.fetch!(acc.ships, ship.id), "#{one.name} and #{other.name} collided")
+        end)
     end
   end
 
@@ -474,8 +599,22 @@ defmodule ExPilot.Game do
     gap = (Ship.radius() * 2 - distance) / 2 + 0.01
 
     {
-      %{one | body: %{one.body | vel: {avx + (along_b - along_a) * nx, avy + (along_b - along_a) * ny}, pos: {ax - nx * gap, ay - ny * gap}}},
-      %{other | body: %{other.body | vel: {bvx + (along_a - along_b) * nx, bvy + (along_a - along_b) * ny}, pos: {bx + nx * gap, by + ny * gap}}}
+      %{
+        one
+        | body: %{
+            one.body
+            | vel: {avx + (along_b - along_a) * nx, avy + (along_b - along_a) * ny},
+              pos: {ax - nx * gap, ay - ny * gap}
+          }
+      },
+      %{
+        other
+        | body: %{
+            other.body
+            | vel: {bvx + (along_a - along_b) * nx, bvy + (along_a - along_b) * ny},
+              pos: {bx + nx * gap, by + ny * gap}
+          }
+      }
     }
   end
 
@@ -483,44 +622,115 @@ defmodule ExPilot.Game do
 
   defp strike_lasered(game) do
     Enum.reduce(Enum.reverse(game.lasered), game, fn {shooter, victim, at}, acc ->
-      case Map.get(acc.ships, victim) do
-        %{alive?: true} = ship ->
-          cond do
-            Items.has?(ship, :mirror) -> emit(acc, {:bounce, at})
-            acc.settings.stun_laser? -> %{acc | ships: Map.put(acc.ships, victim, %{ship | ecm_until: acc.time + @stun_time})} |> emit({:ecm, at})
-            true -> strike(acc, shooter, victim, at, :laser)
-          end
-
-        _ ->
-          acc
-      end
+      lasered(acc, Map.get(acc.ships, victim), shooter, at)
     end)
   end
 
+  defp lasered(game, %{alive?: true} = ship, shooter, at) do
+    cond do
+      Items.has?(ship, :mirror) ->
+        emit(game, {:bounce, at})
+
+      game.settings.stun_laser? ->
+        stunned = Ship.timer(ship, :ecm_until, game.time + @stun_time)
+        %{game | ships: Map.put(game.ships, ship.id, stunned)} |> emit({:ecm, at})
+
+      true ->
+        strike(game, shooter, ship.id, at, :laser)
+    end
+  end
+
+  defp lasered(game, _dead, _shooter, _at), do: game
+
   defp maybe_new_round(%{ships: ships} = game, _dt) when map_size(ships) == 0, do: game
+
+  defp maybe_new_round(%{settings: %{first_to: kills}, round_over_in: nil} = game, _dt)
+       when is_integer(kills) do
+    case Enum.find(game.ships, fn {_, %{tally: tally}} ->
+           tally.kills - tally.recorded.kills >= kills
+         end) do
+      {_, winner} ->
+        %{game | round_over_in: @round_pause, won_by: winner.name}
+        |> results(winner.name)
+        |> tell(winner.name <> " won the duel")
+
+      nil ->
+        game
+    end
+  end
+
+  defp maybe_new_round(%{won_by: winner} = game, _dt) when winner != nil, do: game
   defp maybe_new_round(%{settings: %{lives: :unlimited}} = game, _dt), do: game
 
   defp maybe_new_round(%{round_over_in: nil} = game, _dt) do
     case standing(game) do
-      [] -> new_round(game)
-      [winner] when map_size(game.ships) > 1 -> %{game | round_over_in: @round_pause} |> tell(winner <> " won the round")
-      _several -> game
+      [] ->
+        game |> results(nil) |> new_round()
+
+      [winner] when map_size(game.ships) > 1 ->
+        %{game | round_over_in: @round_pause}
+        |> results(winner)
+        |> tell(winner <> " won the round")
+
+      _several ->
+        game
     end
   end
 
-  defp maybe_new_round(%{round_over_in: left} = game, dt) when left > dt, do: %{game | round_over_in: left - dt}
+  defp maybe_new_round(%{round_over_in: left} = game, dt) when left > dt,
+    do: %{game | round_over_in: left - dt}
+
   defp maybe_new_round(game, _dt), do: new_round(game)
 
+  defp results(game, winner) do
+    Enum.reduce(game.ships, game, fn {id, ship}, acc ->
+      {row, ship} =
+        Ship.result(ship, winner != nil and winner in [ship.name, "team #{ship.team}"])
+
+      %{acc | ships: Map.put(acc.ships, id, ship)}
+      |> emit({:result, Map.put(row, :mode, mode(acc))})
+    end)
+  end
+
+  @contact_range 30.0
+
+  defp count_contact(game, dt) do
+    alive = for {_, ship} <- game.ships, ship.alive?, do: ship
+
+    ships =
+      Map.new(game.ships, fn {id, ship} ->
+        if ship.alive? and Enum.any?(alive, &enemy_near?(&1, ship)),
+          do: {id, Ship.in_contact(ship, dt)},
+          else: {id, ship}
+      end)
+
+    %{game | ships: ships}
+  end
+
+  defp enemy_near?(other, ship) do
+    other.id != ship.id and (ship.team == nil or other.team != ship.team) and
+      Collision.circles_overlap?(other.body.pos, @contact_range, ship.body.pos, 0.0)
+  end
+
   defp new_round(game) do
-    ships = Map.new(game.ships, fn {id, ship} -> {id, spawned(Ship.new_round(ship, game.settings.lives), game)} end)
+    ships =
+      Map.new(game.ships, fn {id, ship} ->
+        {id, spawned(Ship.new_round(ship, game.settings.lives), game)}
+      end)
+
     %{game | ships: ships, round_over_in: nil} |> emit({:round, centre(game)})
   end
 
   defp standing(%{settings: %{teamplay?: true}} = game) do
-    game.ships |> Map.values() |> Enum.reject(&out?/1) |> Enum.uniq_by(& &1.team) |> Enum.map(&"team #{&1.team}")
+    game.ships
+    |> Map.values()
+    |> Enum.reject(&out?/1)
+    |> Enum.uniq_by(& &1.team)
+    |> Enum.map(&"team #{&1.team}")
   end
 
-  defp standing(game), do: game.ships |> Map.values() |> Enum.reject(&out?/1) |> Enum.map(& &1.name)
+  defp standing(game),
+    do: game.ships |> Map.values() |> Enum.reject(&out?/1) |> Enum.map(& &1.name)
 
   defp fly_ships(game, dt) do
     Enum.reduce(game.ships, game, fn {id, _}, acc -> fly_ship(acc, id, dt) end)
@@ -553,10 +763,17 @@ defmodule ExPilot.Game do
     ship = Map.fetch!(game.ships, id)
 
     cond do
-      ship.fuel > 0 -> %{game | ships: Map.put(game.ships, id, %{ship | empty_since: nil})}
-      ship.empty_since == nil -> %{game | ships: Map.put(game.ships, id, %{ship | empty_since: game.time})}
-      game.time - ship.empty_since < @starve_after -> game
-      true -> lose(game, ship, "#{ship.name} ran out of fuel")
+      ship.fuel > 0 ->
+        %{game | ships: Map.put(game.ships, id, Ship.timer(ship, :empty_since, nil))}
+
+      ship.timers.empty_since == nil ->
+        %{game | ships: Map.put(game.ships, id, Ship.timer(ship, :empty_since, game.time))}
+
+      game.time - ship.timers.empty_since < @starve_after ->
+        game
+
+      true ->
+        lose(game, ship, "#{ship.name} ran out of fuel")
     end
   end
 
@@ -569,9 +786,15 @@ defmodule ExPilot.Game do
     ship = Map.fetch!(game.ships, id)
 
     case Items.take_at(game.items, ship.body.pos) do
-      {nil, _} -> game
-      {_item, _} when ship.shielding? and not game.settings.shielded_pickup? -> game
-      {%{kind: kind}, rest} -> %{game | items: rest, ships: Map.put(game.ships, id, Items.pick_up(ship, kind))} |> emit({:pick_up, ship.body.pos})
+      {nil, _} ->
+        game
+
+      {_item, _} when ship.shielding? and not game.settings.shielded_pickup? ->
+        game
+
+      {%{kind: kind}, rest} ->
+        %{game | items: rest, ships: Map.put(game.ships, id, Items.pick_up(ship, kind))}
+        |> emit({:pick_up, ship.body.pos})
     end
   end
 
@@ -579,12 +802,26 @@ defmodule ExPilot.Game do
 
   defp race(game, id) do
     ship = Map.fetch!(game.ships, id)
-    passed = Race.pass(ship, game.settings.checkpoints, game.settings.laps, game.settings.checkpoint_reach)
+
+    passed =
+      Race.pass(
+        ship,
+        game.settings.checkpoints,
+        game.settings.laps,
+        game.settings.checkpoint_reach
+      )
 
     cond do
-      passed.finished? and not ship.finished? -> %{game | ships: Map.put(game.ships, id, passed)} |> emit({:finish, ship.body.pos}) |> tell("#{ship.name} finished")
-      passed.checkpoint != ship.checkpoint or passed.laps != ship.laps -> %{game | ships: Map.put(game.ships, id, passed)} |> emit({:checkpoint, ship.body.pos})
-      true -> game
+      passed.race.finished? and not ship.race.finished? ->
+        %{game | ships: Map.put(game.ships, id, passed)}
+        |> emit({:finish, ship.body.pos})
+        |> tell("#{ship.name} finished")
+
+      passed.race != ship.race ->
+        %{game | ships: Map.put(game.ships, id, passed)} |> emit({:checkpoint, ship.body.pos})
+
+      true ->
+        game
     end
   end
 
@@ -603,7 +840,11 @@ defmodule ExPilot.Game do
   defp steer_toward(ship, {ax, ay}, steps) do
     {x, y} = ship.body.pos
     wanted = heading_toward(ship.body, {ax - x, ay - y})
-    delta = Integer.mod(wanted - ship.body.heading + div(Ship.headings(), 2), Ship.headings()) - div(Ship.headings(), 2)
+
+    delta =
+      Integer.mod(wanted - ship.body.heading + div(Ship.headings(), 2), Ship.headings()) -
+        div(Ship.headings(), 2)
+
     step = min(abs(delta), steps) * sign(delta)
     %{ship | body: Body.turn(ship.body, step)}
   end
@@ -624,30 +865,54 @@ defmodule ExPilot.Game do
       shielding? = shielding?(ship, game)
       burn = if shielding?, do: @shield_burn * dt, else: 0.0
 
-      {%{ship | cooldown: max(0.0, ship.cooldown - dt), shielding?: shielding?, thrusting?: false, fuel: max(0.0, ship.fuel - burn)}, game}
+      {%{
+         ship
+         | timers: %{ship.timers | cooldown: max(0.0, ship.timers.cooldown - dt)},
+           shielding?: shielding?,
+           thrusting?: false,
+           fuel: max(0.0, ship.fuel - burn)
+       }, game}
     end
   end
 
   defp propel(%Ship{} = ship, dt, game) do
-    thrusting? = Ship.holding?(ship, :thrust) and (ship.fuel > 0 or ship.emergency_thrust_until > game.time)
+    thrusting? =
+      Ship.holding?(ship, :thrust) and
+        (ship.fuel > 0 or ship.timers.emergency_thrust_until > game.time)
+
     shielding? = shielding?(ship, game)
 
-    body = if thrusting?, do: Body.thrust(ship.body, @thrust * Gear.thrust_factor(ship, game.time), dt), else: ship.body
-    burn = (if thrusting? and ship.emergency_thrust_until <= game.time, do: @thrust_burn, else: 0.0) + if shielding?, do: @shield_burn, else: 0.0
+    power = Ship.strength(ship, :thrust)
+
+    body =
+      if thrusting?,
+        do: Body.thrust(ship.body, @thrust * power * Gear.thrust_factor(ship, game.time), dt),
+        else: ship.body
+
+    burn =
+      if(thrusting? and ship.timers.emergency_thrust_until <= game.time,
+        do: @thrust_burn * power,
+        else: 0.0
+      ) + if shielding?, do: @shield_burn, else: 0.0
 
     ship = %{
       ship
-      | body: body |> Body.gravitate(game.fields, dt) |> Body.drag(game.settings.drag, dt) |> Body.cap_speed(@max_speed),
+      | body:
+          body
+          |> Body.gravitate(game.fields, dt)
+          |> Body.drag(game.settings.drag, dt)
+          |> Body.cap_speed(@max_speed),
         fuel: max(0.0, ship.fuel - burn * dt),
         thrusting?: thrusting?,
         shielding?: shielding?,
-        cooldown: max(0.0, ship.cooldown - dt)
+        timers: %{ship.timers | cooldown: max(0.0, ship.timers.cooldown - dt)}
     }
 
     if thrusting?, do: {ship, exhaust(game, ship)}, else: {ship, game}
   end
 
-  defp shielding?(ship, game), do: game.settings.shields? and Ship.holding?(ship, :shield) and ship.fuel > 0
+  defp shielding?(ship, game),
+    do: game.settings.shields? and Ship.holding?(ship, :shield) and ship.fuel > 0
 
   defp exhaust(game, ship) do
     {dx, dy} = Body.direction(ship.body)
@@ -655,34 +920,57 @@ defmodule ExPilot.Game do
     {vx, vy} = ship.body.vel
     {jitter, rng} = Rng.between(game.rng, -20, 20)
     spread = jitter / 100
+    power = Ship.strength(ship, :thrust)
+    speed = 2 + 4 * power
 
     spark = %{
       art: :spark,
       pos: {x - dx * 0.5, y - dy * 0.5},
-      vel: {vx - dx * 6 + dy * spread * 6, vy - dy * 6 - dx * spread * 6},
-      ttl: 0.25
+      vel: {vx - dx * speed + dy * spread * speed, vy - dy * speed - dx * spread * speed},
+      ttl: 0.1 + 0.15 * power
     }
 
     %{game | rng: rng, particles: Particles.spawn(game.particles, [spark])}
   end
 
   defp fire({ship, game}, _dt, _unused) do
-    if Ship.holding?(ship, :fire) and not Gear.confused?(ship, game.time) and ship.cooldown <= 0 and ship.fuel >= @shot_cost and
+    if Ship.holding?(ship, :fire) and not Gear.confused?(ship, game.time) and
+         ship.timers.cooldown <= 0 and
+         ship.fuel >= @shot_cost and
          shots_of(game, ship.id) < game.settings.max_shots do
       spread = if Items.has?(ship, :wideangle), do: [0, 3, -3], else: [0]
       directions = Enum.map(spread, &Body.direction(Body.turn(ship.body, &1)))
-      directions = if Items.has?(ship, :rearshot), do: [{-elem(hd(directions), 0), -elem(hd(directions), 1)} | directions], else: directions
+
+      directions =
+        if Items.has?(ship, :rearshot),
+          do: [{-elem(hd(directions), 0), -elem(hd(directions), 1)} | directions],
+          else: directions
 
       {shots, next_id} =
         Enum.map_reduce(directions, game.next_id, fn {dx, dy}, id ->
           {x, y} = ship.body.pos
           {vx, vy} = ship.body.vel
           speed = game.settings.shot_speed
-          {%{id: id, owner: ship.id, kind: :shot, body: Body.new(pos: {x + dx * 0.6, y + dy * 0.6}, vel: {vx + dx * speed, vy + dy * speed}, radius: @shot_radius), life: game.settings.shot_life}, id + 1}
+
+          {%{
+             id: id,
+             owner: ship.id,
+             kind: :shot,
+             body:
+               Body.new(
+                 pos: {x + dx * 0.6, y + dy * 0.6},
+                 vel: {vx + dx * speed, vy + dy * speed},
+                 radius: @shot_radius
+               ),
+             life: game.settings.shot_life
+           }, id + 1}
         end)
 
-      game = %{game | shots: shots ++ game.shots, next_id: next_id} |> emit({:fire, ship.body.pos})
-      {%{ship | cooldown: game.settings.fire_cooldown, fuel: ship.fuel - @shot_cost}, game}
+      game =
+        %{game | shots: shots ++ game.shots, next_id: next_id} |> emit({:fire, ship.body.pos})
+
+      fired = %{ship | fuel: ship.fuel - @shot_cost}
+      {Ship.timer(fired, :cooldown, game.settings.fire_cooldown), game}
     else
       {ship, game}
     end
@@ -700,19 +988,20 @@ defmodule ExPilot.Game do
     if Gear.phasing?(ship, game.time) do
       {%{ship | body: wrapped(%{ship.body | pos: to}, game)}, game}
     else
-      case Collision.sweep(grid, from, to, Ship.radius()) do
-        {:clear, at} ->
-          {%{ship | body: wrapped(%{ship.body | pos: at}, game)}, game}
-
-        {:blocked, at, normal, _cell} ->
-          shielded? = Gear.shielded?(ship, game.time)
-          limit = if shielded?, do: game.settings.shielded_crash_speed, else: game.settings.crash_speed
-
-          if Body.speed(ship.body) <= limit,
-            do: bounce(ship, game, at, normal, shielded?),
-            else: crash(ship, game, at)
-      end
+      swept(ship, game, Collision.sweep(grid, from, to, Ship.radius()))
     end
+  end
+
+  defp swept(ship, game, {:clear, at}),
+    do: {%{ship | body: wrapped(%{ship.body | pos: at}, game)}, game}
+
+  defp swept(ship, game, {:blocked, at, normal, _cell}) do
+    shielded? = Gear.shielded?(ship, game.time)
+    limit = if shielded?, do: game.settings.shielded_crash_speed, else: game.settings.crash_speed
+
+    if Body.speed(ship.body) <= limit,
+      do: bounce(ship, game, at, normal, shielded?),
+      else: crash(ship, game, at)
   end
 
   defp crash(ship, game, at) do
@@ -721,19 +1010,30 @@ defmodule ExPilot.Game do
   end
 
   defp bounce(ship, game, at, normal, shielded?) do
-    body = %{ship.body | pos: at, vel: Collision.bounce(ship.body.vel, normal, game.settings.bounce_keep)}
+    body = %{
+      ship.body
+      | pos: at,
+        vel: Collision.bounce(ship.body.vel, normal, game.settings.bounce_keep)
+    }
+
     fuel = if shielded?, do: ship.fuel, else: max(0.0, ship.fuel - game.settings.bounce_fuel)
     {%{ship | body: wrapped(body, game), fuel: fuel}, emit(game, {:bounce, at})}
   end
 
-  defp wrapped(body, %{settings: %{wrap?: true}, arena: arena}), do: Body.wrap(body, Arena.size(arena))
+  defp wrapped(body, %{settings: %{wrap?: true}, arena: arena}),
+    do: Body.wrap(body, Arena.size(arena))
+
   defp wrapped(body, _game), do: body
 
   defp explode({ship, game}) do
     pos = ship.body.pos
     {debris, rng} = debris(game.rng, pos, 24)
     {items, rng} = Items.drop(game.items, ship, game.settings.drop_prob, rng)
-    game = %{game | rng: rng, items: items, particles: Particles.spawn(game.particles, debris)} |> emit({:explosion, pos})
+
+    game =
+      %{game | rng: rng, items: items, particles: Particles.spawn(game.particles, debris)}
+      |> emit({:explosion, pos})
+
     {%{Ship.die(ship, @respawn_after) | ball: nil}, game}
   end
 
@@ -743,7 +1043,13 @@ defmodule ExPilot.Game do
       {speed, rng} = Rng.between(rng, 3, 9)
       {life, rng} = Rng.between(rng, 30, 90)
       theta = angle * :math.pi() / 180
-      {%{art: :debris, pos: {x, y}, vel: {:math.cos(theta) * speed, :math.sin(theta) * speed}, ttl: life / 100}, rng}
+
+      {%{
+         art: :debris,
+         pos: {x, y},
+         vel: {:math.cos(theta) * speed, :math.sin(theta) * speed},
+         ttl: life / 100
+       }, rng}
     end)
   end
 
@@ -785,25 +1091,27 @@ defmodule ExPilot.Game do
 
           {%{pos: {ex, ey}}, rng} ->
             moved = %{ship | body: %{ship.body | pos: {ex + 0.5, ey + 0.5}}}
-            %{game | rng: rng, ships: Map.put(game.ships, id, moved)} |> emit({:wormhole, ship.body.pos})
+
+            %{game | rng: rng, ships: Map.put(game.ships, id, moved)}
+            |> emit({:wormhole, ship.body.pos})
         end
     end
   end
 
   defp countdown(game, id, dt) do
     ship = Map.fetch!(game.ships, id)
-    remaining = ship.respawn_in - dt
+    remaining = ship.timers.respawn_in - dt
 
     cond do
       remaining > 0 ->
-        %{game | ships: Map.put(game.ships, id, %{ship | respawn_in: remaining})}
+        %{game | ships: Map.put(game.ships, id, Ship.timer(ship, :respawn_in, remaining))}
 
       Ship.can_respawn?(ship) ->
         revived = spawned(Ship.respawn(ship), game)
         %{game | ships: Map.put(game.ships, id, revived)} |> emit({:respawn, revived.body.pos})
 
       true ->
-        %{game | ships: Map.put(game.ships, id, %{ship | respawn_in: 0.0})}
+        %{game | ships: Map.put(game.ships, id, Ship.timer(ship, :respawn_in, 0.0))}
     end
   end
 
@@ -823,7 +1131,9 @@ defmodule ExPilot.Game do
     game.ships
     |> Map.values()
     |> Enum.filter(& &1.alive?)
-    |> Enum.reduce(Buckets.new(4), fn ship, buckets -> Buckets.insert(buckets, ship.id, ship.body.pos, Ship.radius()) end)
+    |> Enum.reduce(Buckets.new(4), fn ship, buckets ->
+      Buckets.insert(buckets, ship.id, ship.body.pos, Ship.radius())
+    end)
   end
 
   defp advance_shot(game, %{kind: :mine} = mine, dt, _grid, buckets, kept) do
@@ -838,9 +1148,17 @@ defmodule ExPilot.Game do
         {game, [mine | kept]}
 
       true ->
-        case Enum.reject(Buckets.near(buckets, mine.body.pos, mine.body.radius), &(&1 == mine.owner)) do
-          [] -> {game, [mine | kept]}
-          [victim | _] -> {game |> strike(mine.owner, victim, mine.body.pos, :mine) |> emit({:explosion, mine.body.pos}), kept}
+        case Enum.reject(
+               Buckets.near(buckets, mine.body.pos, mine.body.radius),
+               &(&1 == mine.owner)
+             ) do
+          [] ->
+            {game, [mine | kept]}
+
+          [victim | _] ->
+            {game
+             |> strike(mine.owner, victim, mine.body.pos, :mine)
+             |> emit({:explosion, mine.body.pos}), kept}
         end
     end
   end
@@ -849,35 +1167,64 @@ defmodule ExPilot.Game do
     life = shot.life - dt
     from = shot.body.pos
     shot = Weapons.steer(shot, Map.values(game.ships), dt, game.settings.shot_speed)
-    pulled = if game.settings.shots_gravity?, do: Body.gravitate(shot.body, game.fields, dt), else: shot.body
+
+    pulled =
+      if game.settings.shots_gravity?,
+        do: Body.gravitate(shot.body, game.fields, dt),
+        else: shot.body
+
     to = Body.integrate(pulled, dt)
 
-    cond do
-      life <= 0 ->
-        {game, kept}
+    if life <= 0 do
+      {game, kept}
+    else
+      shot = %{shot | life: life}
 
-      true ->
-        case Collision.sweep(grid, from, to.pos, shot.body.radius) do
-          {:blocked, at, normal, _cell} when game.settings.shots_bounce? ->
-            {game, [%{shot | body: wrapped(%{to | pos: at, vel: Collision.bounce(to.vel, normal, 0.9)}, game), life: life} | kept]}
+      shot_swept(
+        game,
+        shot,
+        to,
+        Collision.sweep(grid, from, to.pos, shot.body.radius),
+        buckets,
+        kept
+      )
+    end
+  end
 
-          {:blocked, at, _normal, _cell} ->
-            {emit(game, {:shot_wall, at}), kept}
+  defp shot_swept(
+         %{settings: %{shots_bounce?: true}} = game,
+         shot,
+         to,
+         {:blocked, at, normal, _cell},
+         _buckets,
+         kept
+       ) do
+    body = wrapped(%{to | pos: at, vel: Collision.bounce(to.vel, normal, 0.9)}, game)
+    {game, [%{shot | body: body} | kept]}
+  end
 
-          {:clear, at} ->
-            moved = %{shot | body: wrapped(%{to | pos: at}, game), life: life}
+  defp shot_swept(game, _shot, _to, {:blocked, at, _normal, _cell}, _buckets, kept),
+    do: {emit(game, {:shot_wall, at}), kept}
 
-            case target_hit(game, shot, moved.body.pos) do
-              {:hit, game} ->
-                {game, kept}
+  defp shot_swept(game, shot, to, {:clear, at}, buckets, kept) do
+    moved = %{shot | body: wrapped(%{to | pos: at}, game)}
 
-              :miss ->
-                case Enum.reject(Buckets.near(buckets, moved.body.pos, shot.body.radius), &(&1 == shot.owner or not hittable?(game, shot.owner, &1))) do
-                  [] -> {game, [moved | kept]}
-                  [victim | _] -> {strike(game, shot.owner, victim, moved.body.pos, shot.kind), kept}
-                end
-            end
-        end
+    case target_hit(game, shot, moved.body.pos) do
+      {:hit, game} -> {game, kept}
+      :miss -> shot_among_ships(game, moved, buckets, kept)
+    end
+  end
+
+  defp shot_among_ships(game, shot, buckets, kept) do
+    victims =
+      Enum.reject(
+        Buckets.near(buckets, shot.body.pos, shot.body.radius),
+        &(&1 == shot.owner or not hittable?(game, shot.owner, &1))
+      )
+
+    case victims do
+      [] -> {game, [shot | kept]}
+      [victim | _] -> {strike(game, shot.owner, victim, shot.body.pos, shot.kind), kept}
     end
   end
 
@@ -887,21 +1234,35 @@ defmodule ExPilot.Game do
     cell = Collision.cell_of(pos)
 
     if Targets.standing?(game.targets, cell) do
-      case Targets.hit(game.targets, cell, team_of(game, shot.owner)) do
-        {_targets, :none} ->
-          :miss
-
-        {targets, :hit} ->
-          {:hit, %{game | targets: targets} |> emit({:target_hit, pos})}
-
-        {targets, {:destroyed, team, points}} ->
-          game = %{game | targets: targets} |> emit({:target_destroyed, pos})
-          game = if is_map_key(game.ships, shot.owner), do: game |> award(shot.owner, team, points) |> tell("#{name_of_ship(game, shot.owner)} destroyed a target"), else: game
-          {:hit, fall_of_targets(game, cell)}
-      end
+      target_struck(
+        game,
+        shot,
+        pos,
+        cell,
+        Targets.hit(game.targets, cell, team_of(game, shot.owner))
+      )
     else
       :miss
     end
+  end
+
+  defp target_struck(_game, _shot, _pos, _cell, {_targets, :none}), do: :miss
+
+  defp target_struck(game, _shot, pos, _cell, {targets, :hit}),
+    do: {:hit, %{game | targets: targets} |> emit({:target_hit, pos})}
+
+  defp target_struck(game, shot, pos, cell, {targets, {:destroyed, team, points}}) do
+    game = %{game | targets: targets} |> emit({:target_destroyed, pos})
+    {:hit, game |> target_credited(shot.owner, team, points) |> fall_of_targets(cell)}
+  end
+
+  defp target_credited(game, owner, team, points) do
+    if is_map_key(game.ships, owner),
+      do:
+        game
+        |> award(owner, team, points)
+        |> tell("#{name_of_ship(game, owner)} destroyed a target"),
+      else: game
   end
 
   defp fall_of_targets(%{settings: %{target_kill_team?: false}} = game, _cell), do: game
@@ -909,7 +1270,9 @@ defmodule ExPilot.Game do
   defp fall_of_targets(game, cell) do
     case Enum.find(game.targets, &(&1.pos == cell)) do
       %{team: team} when team != nil ->
-        if Targets.standing_for?(game.targets, team), do: game, else: kill_team(game, team, "team #{team} lost its last target")
+        if Targets.standing_for?(game.targets, team),
+          do: game,
+          else: kill_team(game, team, "team #{team} lost its last target")
 
       _ ->
         game
@@ -920,7 +1283,9 @@ defmodule ExPilot.Game do
     game.ships
     |> Map.values()
     |> Enum.filter(&(&1.alive? and &1.team == team))
-    |> Enum.reduce(tell(game, message), fn ship, acc -> lose(acc, Map.fetch!(acc.ships, ship.id), "#{ship.name} went down with the team") end)
+    |> Enum.reduce(tell(game, message), fn ship, acc ->
+      lose(acc, Map.fetch!(acc.ships, ship.id), "#{ship.name} went down with the team")
+    end)
   end
 
   defp team_of(game, owner) do
@@ -948,26 +1313,29 @@ defmodule ExPilot.Game do
     victim = Map.fetch!(game.ships, victim_id)
 
     cond do
-      not victim.alive? ->
-        game
-
-      Gear.phasing?(victim, game.time) ->
-        game
-
-      Gear.shielded?(victim, game.time) or victim.deflecting? or immune?(victim, game.time) ->
-        emit(game, {:bounce, pos})
-
-      not game.settings.killing? and not match?({:cannon, _}, owner) ->
-        emit(game, {:bounce, pos})
-
-      victim.armour > 0 ->
-        %{game | ships: Map.put(game.ships, victim_id, %{victim | armour: victim.armour - 1})} |> emit({:bounce, pos})
-
-      true ->
-        {dead, game} = explode({victim, game})
-        game = %{game | ships: Map.put(game.ships, victim_id, dead)} |> emit({:kill, pos})
-        game |> credit(owner) |> tell(kill_message(game, owner, victim, kind))
+      untouchable?(victim, game) -> game
+      deflects?(victim, game, owner) -> emit(game, {:bounce, pos})
+      victim.armour > 0 -> armour_struck(game, victim, pos)
+      true -> killed(game, owner, victim, pos, kind)
     end
+  end
+
+  defp untouchable?(victim, game), do: not victim.alive? or Gear.phasing?(victim, game.time)
+
+  defp deflects?(victim, game, owner) do
+    Gear.shielded?(victim, game.time) or victim.deflecting? or immune?(victim, game.time) or
+      (not game.settings.killing? and not match?({:cannon, _}, owner))
+  end
+
+  defp armour_struck(game, victim, pos) do
+    %{game | ships: Map.put(game.ships, victim.id, %{victim | armour: victim.armour - 1})}
+    |> emit({:bounce, pos})
+  end
+
+  defp killed(game, owner, victim, pos, kind) do
+    {dead, game} = explode({victim, game})
+    game = %{game | ships: Map.put(game.ships, victim.id, dead)} |> emit({:kill, pos})
+    game |> credit(owner) |> tell(kill_message(game, owner, victim, kind))
   end
 
   defp kill_message(game, owner, victim, kind) do
@@ -996,8 +1364,11 @@ defmodule ExPilot.Game do
         cooled = %{cannon | cooldown: max(0.0, cannon.cooldown - dt)}
 
         case {cooled.cooldown, target_for(acc, cooled)} do
-          {cd, target} when cd <= 0 and target != nil -> {%{cooled | cooldown: @cannon_cooldown}, cannon_fire(acc, cooled, target)}
-          _ -> {cooled, acc}
+          {cd, target} when cd <= 0 and target != nil ->
+            {%{cooled | cooldown: @cannon_cooldown}, cannon_fire(acc, cooled, target)}
+
+          _ ->
+            {cooled, acc}
         end
       end)
 
@@ -1009,9 +1380,10 @@ defmodule ExPilot.Game do
 
     game.ships
     |> Map.values()
-    |> Enum.filter(&(&1.alive? and not &1.cloaked?))
-    |> Enum.filter(fn ship -> in_front?(facing, muzzle, ship.body.pos) end)
-    |> Enum.filter(fn ship -> Collision.circles_overlap?(muzzle, @cannon_range, ship.body.pos, 0.0) end)
+    |> Enum.filter(fn ship ->
+      ship.alive? and not ship.cloaked? and in_front?(facing, muzzle, ship.body.pos) and
+        Collision.circles_overlap?(muzzle, @cannon_range, ship.body.pos, 0.0)
+    end)
     |> Enum.min_by(fn ship -> distance_sq(muzzle, ship.body.pos) end, fn -> nil end)
   end
 
@@ -1034,7 +1406,12 @@ defmodule ExPilot.Game do
       id: game.next_id,
       owner: {:cannon, {cx, cy}},
       kind: :shot,
-      body: Body.new(pos: {mx + (tx - mx) / length, my + (ty - my) / length}, vel: vel, radius: @shot_radius),
+      body:
+        Body.new(
+          pos: {mx + (tx - mx) / length, my + (ty - my) / length},
+          vel: vel,
+          radius: @shot_radius
+        ),
       life: game.settings.shot_life * 2
     }
 
@@ -1046,29 +1423,24 @@ defmodule ExPilot.Game do
     me = Map.get(game.ships, id)
     watching = watched_by(game, id, me)
 
-    focus =
-      cond do
-        watching -> watching.body.pos
-        me -> me.body.pos
-        true -> Map.get(game.watchers, id, %{focus: centre(game)}).focus
-      end
-
     %{
       me: me && summary_of(me),
-      focus: focus,
+      focus: focus_of(game, id, me, watching),
       watching: watching && watching.name,
       radar: %{players?: game.settings.players_on_radar?},
       rules: %{shields?: game.settings.shields?, crash_speed: game.settings.crash_speed},
       mode: game.settings.mode,
-      others_out?: me != nil and map_size(game.ships) > 1 and Enum.all?(game.ships, fn {other, ship} -> other == id or out?(ship) end),
+      others_out?: others_out?(game, id, me),
       round_over?: game.round_over_in != nil,
+      won_by: game.won_by,
       enemies: Enum.count(game.ships, fn {other, ship} -> other != id and not out?(ship) end),
-      ships: for({_, ship} <- game.ships, ship.alive?, visible?(ship, me), do: seen(ship, game.time)),
+      ships:
+        for({_, ship} <- game.ships, ship.alive?, visible?(ship, me), do: seen(ship, game.time)),
       shots: for(%{kind: :shot, body: %{pos: pos}} <- game.shots, do: pos),
-      missiles: for(%{kind: kind, body: %{pos: pos, vel: vel}} <- game.shots, kind in [:torpedo, :smart, :heat], do: {kind, pos, vel}),
+      missiles: missiles_view(game.shots),
       mines: for(%{kind: :mine, body: %{pos: pos}} <- game.shots, do: pos),
       items: Enum.map(game.items, &{&1.kind, &1.pos}),
-      balls: Enum.map(game.balls, &%{pos: &1.pos, vel: &1.vel, string: &1.carrier && carrier_pos(game, &1.carrier)}),
+      balls: Enum.map(game.balls, &ball_view(game, &1)),
       beams: game.beams,
       targets_gone: Targets.gone(game.targets),
       particles: Particles.movers(game.particles, {-0.5, -0.5}),
@@ -1082,6 +1454,26 @@ defmodule ExPilot.Game do
       time: game.time
     }
   end
+
+  defp focus_of(_game, _id, _me, %{body: %{pos: pos}}), do: pos
+  defp focus_of(_game, _id, %{body: %{pos: pos}}, nil), do: pos
+  defp focus_of(game, id, nil, nil), do: Map.get(game.watchers, id, %{focus: centre(game)}).focus
+
+  defp others_out?(_game, _id, nil), do: false
+
+  defp others_out?(game, id, _me) do
+    map_size(game.ships) > 1 and
+      Enum.all?(game.ships, fn {other, ship} -> other == id or out?(ship) end)
+  end
+
+  defp missiles_view(shots) do
+    for %{kind: kind, body: %{pos: pos, vel: vel}} <- shots,
+        kind in [:torpedo, :smart, :heat],
+        do: {kind, pos, vel}
+  end
+
+  defp ball_view(game, ball),
+    do: %{pos: ball.pos, vel: ball.vel, string: ball.carrier && carrier_pos(game, ball.carrier)}
 
   defp watched_by(game, id, nil) do
     case Map.get(game.watchers, id) do
@@ -1104,9 +1496,11 @@ defmodule ExPilot.Game do
     %{summary | shielding?: summary.shielding? or immune?(ship, now)}
   end
 
-  defp spawned(ship, game), do: %{Ship.equip(ship, game.settings.kit) | immune_until: game.time + @spawn_immunity}
+  defp spawned(ship, game),
+    do:
+      Ship.timer(Ship.equip(ship, game.settings.kit), :immune_until, game.time + @spawn_immunity)
 
-  defp immune?(ship, now), do: ship.immune_until > now
+  defp immune?(ship, now), do: ship.timers.immune_until > now
 
   defp visible?(ship, me) do
     not ship.cloaked? or (me != nil and (ship.id == me.id or Items.has?(me, :sensor)))
@@ -1118,15 +1512,23 @@ defmodule ExPilot.Game do
     game.ships
     |> Map.values()
     |> Enum.reject(&is_nil(&1.team))
-    |> Enum.group_by(& &1.team, & &1.score)
-    |> Map.new(fn {team, scores} -> {team, Enum.sum(scores) + Map.get(game.team_bonus, team, 0)} end)
+    |> Enum.group_by(& &1.team, & &1.tally.score)
+    |> Map.new(fn {team, scores} ->
+      {team, Enum.sum(scores) + Map.get(game.team_bonus, team, 0)}
+    end)
   end
 
   defp race_view(%{settings: %{race?: false}}, _me), do: nil
   defp race_view(_game, nil), do: nil
 
   defp race_view(game, me) do
-    %{lap: me.laps + 1, laps: game.settings.laps, next: me.checkpoint, checkpoints: length(game.settings.checkpoints), finished?: me.finished?}
+    %{
+      lap: me.race.laps + 1,
+      laps: game.settings.laps,
+      next: me.race.checkpoint,
+      checkpoints: length(game.settings.checkpoints),
+      finished?: me.race.finished?
+    }
   end
 
   defp out?(ship), do: not ship.alive? and not Ship.can_respawn?(ship)
@@ -1137,7 +1539,10 @@ defmodule ExPilot.Game do
     game.ships
     |> Map.values()
     |> Enum.filter(fn ship -> ship.id != me.id and ship.alive? end)
-    |> Enum.min_by(fn %{body: %{pos: {x, y}}} -> (x - mx) * (x - mx) + (y - my) * (y - my) end, fn -> nil end)
+    |> Enum.min_by(
+      fn %{body: %{pos: {x, y}}} -> (x - mx) * (x - mx) + (y - my) * (y - my) end,
+      fn -> nil end
+    )
   end
 
   @doc """
@@ -1152,11 +1557,26 @@ defmodule ExPilot.Game do
   """
   @spec outcome(map()) :: nil | %{title: String.t(), lines: [String.t()]}
   def outcome(%{me: nil}), do: nil
+
+  def outcome(%{me: me, won_by: winner, scores: scores}) when winner != nil do
+    lines =
+      Enum.map(scores, fn %{name: name, score: score} ->
+        name <> "  " <> Integer.to_string(score)
+      end)
+
+    if me.name == winner,
+      do: %{title: "Victory", lines: lines, next: :lobby},
+      else: %{title: "Defeat", lines: lines, next: :lobby}
+  end
+
   def outcome(%{me: %{lives: :unlimited}}), do: nil
   def outcome(%{others_out?: false, round_over?: false}), do: nil
 
   def outcome(%{me: me, scores: scores}) do
-    lines = Enum.map(scores, fn %{name: name, score: score} -> name <> "  " <> Integer.to_string(score) end)
+    lines =
+      Enum.map(scores, fn %{name: name, score: score} ->
+        name <> "  " <> Integer.to_string(score)
+      end)
 
     if me.alive? or me.lives > 0,
       do: %{title: "Victory", lines: lines, next: :next_arena},
@@ -1170,9 +1590,9 @@ defmodule ExPilot.Game do
       fuel: ship.fuel,
       max_fuel: ship.max_fuel,
       lives: ship.lives,
-      respawn_in: ship.respawn_in,
-      kills: ship.kills,
-      deaths: ship.deaths,
+      respawn_in: ship.timers.respawn_in,
+      kills: ship.tally.kills,
+      deaths: ship.tally.deaths,
       items: ship.items,
       armour: ship.armour,
       missile: ship.missile
@@ -1182,13 +1602,14 @@ defmodule ExPilot.Game do
   defp scores(game) do
     game.ships
     |> Map.values()
-    |> Enum.map(&%{name: &1.name, score: &1.score, team: &1.team})
+    |> Enum.map(&%{name: &1.name, score: &1.tally.score, team: &1.team})
     |> Enum.sort_by(& &1.score, :desc)
     |> Enum.take(8)
   end
 
   @impl true
-  def drain_events(%__MODULE__{events: events} = game), do: {Enum.reverse(events), %{game | events: []}}
+  def drain_events(%__MODULE__{events: events} = game),
+    do: {Enum.reverse(events), %{game | events: []}}
 
   defp emit(game, event), do: %{game | events: [event | game.events]}
 end

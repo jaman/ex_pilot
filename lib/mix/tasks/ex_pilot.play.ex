@@ -14,7 +14,9 @@ defmodule Mix.Tasks.ExPilot.Play do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: [maps: :string, name: :string, robots: :integer])
+    {opts, _, _} =
+      OptionParser.parse(args, strict: [maps: :string, name: :string, robots: :integer])
+
     Mix.Task.run("app.start")
     Code.ensure_loaded!(Cauldron2D.Drafter.Surface)
     Drafter.Widget.Registry.register(Cauldron2D.Drafter.Surface)
@@ -31,6 +33,8 @@ defmodule Mix.Tasks.ExPilot.Play do
       ExPilot.Arenas.register(id, path, Keyword.take(opts, [:robots]))
     end
 
-    Drafter.run(Cauldron2D.Drafter.Client, props: %{game: ExPilot.Client, username: Keyword.get(opts, :name, "pilot")})
+    Drafter.run(Cauldron2D.Drafter.Client,
+      props: %{game: ExPilot.Client, username: Keyword.get(opts, :name, "pilot")}
+    )
   end
 end

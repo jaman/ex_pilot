@@ -3,10 +3,12 @@ defmodule ExPilot.Web.SheetController do
 
   use Phoenix.Controller, formats: [:html]
 
+  alias Cauldron2D.Net.Sheet
+
   import Plug.Conn
 
   def png(conn, _params) do
-    sheet = Cauldron2D.Web.Sheet.cached(ExPilot.Client.atlas())
+    sheet = Sheet.cached(ExPilot.Client.atlas())
 
     conn
     |> put_resp_content_type("image/png")

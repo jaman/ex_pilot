@@ -24,7 +24,9 @@ defmodule Mix.Tasks.ExPilot.Maps do
 
     Mix.shell().info("fetching #{@url}")
 
-    case :httpc.request(:get, {@url, []}, [ssl: [verify: :verify_none], autoredirect: true], body_format: :binary) do
+    case :httpc.request(:get, {@url, []}, [ssl: [verify: :verify_none], autoredirect: true],
+           body_format: :binary
+         ) do
       {:ok, {{_, 200, _}, _headers, body}} ->
         {:ok, entries} = :erl_tar.extract({:binary, body}, [:compressed, :memory])
 

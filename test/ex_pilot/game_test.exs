@@ -1,7 +1,7 @@
 defmodule ExPilot.GameTest do
   use ExUnit.Case, async: true
 
-  alias ExPilot.Game
+  alias ExPilot.{Game, Ship}
 
   @dt 1 / 50
 
@@ -56,7 +56,11 @@ defmodule ExPilot.GameTest do
   end
 
   test "a ship on a base under a ceiling faces down and launches downward" do
-    {:ok, arena} = ExPilot.Map.parse("mapwidth: 5\nmapheight: 6\nedgewrap: no\ngravity: 0\nmapData: \\multiline: END\nxxxxx\nx_xxx\nx   x\nx   x\nx   x\nxxxxx\nEND\n")
+    {:ok, arena} =
+      ExPilot.Map.parse(
+        "mapwidth: 5\nmapheight: 6\nedgewrap: no\ngravity: 0\nmapData: \\multiline: END\nxxxxx\nx_xxx\nx   x\nx   x\nx   x\nxxxxx\nEND\n"
+      )
+
     game = Game.init(arena: arena, seed: 1) |> joined(:a)
     assert ship(game, :a).body.heading == 48
     assert ship(game, :a).launch_heading == 48
@@ -90,6 +94,42 @@ defmodule ExPilot.GameTest do
     assert :fire not in events(game)
   end
 
+  test "an analog thrust pushes and burns in proportion to its strength" do
+    full = game() |> joined(:a) |> holding(:a, [:thrust]) |> play(25)
+
+    half =
+      game()
+      |> joined(:a)
+      |> Game.handle_input(:a, %{held: MapSet.new([:thrust]), aim: nil, strength: %{thrust: 0.5}})
+      |> play(25)
+
+    {_, full_y} = ship(full, :a).body.pos
+    {_, half_y} = ship(half, :a).body.pos
+    assert half_y > full_y and half_y < 2.5
+    assert ship(half, :a).fuel > ship(full, :a).fuel
+    assert ship(half, :a).thrusting?
+
+    spark = fn game ->
+      game |> play(1) |> Map.get(:particles) |> Map.get(:items) |> Enum.max_by(& &1.ttl)
+    end
+
+    full_spark = spark.(game() |> joined(:a) |> holding(:a, [:thrust]))
+
+    half_spark =
+      spark.(
+        game()
+        |> joined(:a)
+        |> Game.handle_input(:a, %{
+          held: MapSet.new([:thrust]),
+          aim: nil,
+          strength: %{thrust: 0.4}
+        })
+      )
+
+    assert half_spark.ttl < full_spark.ttl
+    assert abs(elem(half_spark.vel, 1)) < abs(elem(full_spark.vel, 1))
+  end
+
   test "turning changes the heading at a steady rate" do
     game = game() |> joined(:a) |> holding(:a, [:turn_right]) |> play(10)
     assert ship(game, :a).body.heading < 16
@@ -110,7 +150,7 @@ defmodule ExPilot.GameTest do
     later = game |> holding(:a, []) |> play(200)
     assert ship(later, :a).alive?
     assert ship(later, :a).body.pos == {3.5, 2.5}
-    assert ship(later, :a).deaths == 1
+    assert ship(later, :a).tally.deaths == 1
   end
 
   test "a shield bounces off the wall instead" do
@@ -134,12 +174,19 @@ defmodule ExPilot.GameTest do
 
   test "a shot kills another ship and the killer scores" do
     game = game() |> joined(:a) |> joined(:b)
-    b = %{ship(game, :b) | body: %{ship(game, :b).body | pos: {3.5, 6.5}, heading: 16}, immune_until: 0.0}
+
+    b =
+      %{
+        ship(game, :b)
+        | body: %{ship(game, :b).body | pos: {3.5, 6.5}, heading: 16}
+      }
+      |> Ship.timer(:immune_until, 0.0)
+
     a = %{ship(game, :a) | body: %{ship(game, :a).body | heading: 48}}
     game = %{game | ships: %{a: a, b: b}} |> holding(:a, [:fire]) |> play(30)
 
     refute ship(game, :b).alive?
-    assert ship(game, :a).kills == 1
+    assert ship(game, :a).tally.kills == 1
     assert :kill in events(game)
   end
 
@@ -147,7 +194,10 @@ defmodule ExPilot.GameTest do
     game = game() |> joined(:a) |> joined(:b)
     b = %{ship(game, :b) | body: %{ship(game, :b).body | pos: {3.5, 6.5}}}
     a = %{ship(game, :a) | body: %{ship(game, :a).body | heading: 48}}
-    game = %{game | ships: %{a: a, b: b}} |> holding(:a, [:fire]) |> holding(:b, [:shield]) |> play(30)
+
+    game =
+      %{game | ships: %{a: a, b: b}} |> holding(:a, [:fire]) |> holding(:b, [:shield]) |> play(30)
+
     assert ship(game, :b).alive?
   end
 
@@ -185,7 +235,9 @@ defmodule ExPilot.GameTest do
   end
 
   test "a ship on its base stays put under gravity until it thrusts" do
-    heavy = "mapwidth: 6\nmapheight: 4\ngravity: -9\nmapData: \\multiline: END\nxxxxxx\nx    x\nx _  x\nxxxxxx\nEND\n"
+    heavy =
+      "mapwidth: 6\nmapheight: 4\ngravity: -9\nmapData: \\multiline: END\nxxxxxx\nx    x\nx _  x\nxxxxxx\nEND\n"
+
     {:ok, arena} = ExPilot.Map.parse(heavy)
     game = Game.init(arena: arena, seed: 1) |> joined(:a) |> play(200)
     assert ship(game, :a).alive?
@@ -194,6 +246,89 @@ defmodule ExPilot.GameTest do
 
     launched = game |> holding(:a, [:thrust]) |> play(5) |> holding(:a, []) |> play(1)
     refute ship(launched, :a).landed?
+  end
+
+  test "a result for every pilot goes out when the round ends and when a pilot leaves: kills, deaths, the best streak and the longest contact" do
+    game = game(lives: 1) |> joined(:a) |> joined(:b) |> joined(:c)
+    a = ship(game, :a) |> ExPilot.Ship.credit_kill() |> ExPilot.Ship.credit_kill()
+    assert a.tally.streak == 2 and a.tally.best_streak == 2
+    a_died = ExPilot.Ship.die(a, 1.0)
+    assert a_died.tally.streak == 0 and a_died.tally.best_streak == 2
+
+    at = fn ship, pos -> %{ship | body: %{ship.body | pos: pos}} end
+
+    near = %{
+      game
+      | ships: %{
+          game.ships
+          | a: at.(a, {10.0, 10.0}),
+            b: at.(ship(game, :b), {14.0, 10.0}),
+            c: at.(ship(game, :c), {90.0, 90.0})
+        }
+    }
+
+    flown = play(near, 25)
+    assert ship(flown, :a).tally.contact > 0.4 and ship(flown, :a).tally.best_contact > 0.4
+    assert ship(flown, :c).tally.contact == 0.0
+
+    out = fn ship -> Ship.timer(%{ship | alive?: false, lives: 0}, :respawn_in, 0.0) end
+
+    over =
+      %{flown | ships: %{flown.ships | b: out.(ship(flown, :b)), c: out.(ship(flown, :c))}}
+      |> play(1)
+
+    {drained, over} = Game.drain_events(over)
+    results = drained |> Enum.filter(&match?({:result, _}, &1)) |> Enum.map(&elem(&1, 1))
+    assert length(results) == 3
+    winner = Enum.find(results, &(&1.id == :a))
+
+    assert %{
+             name: "a",
+             won?: true,
+             kills: 2,
+             deaths: 0,
+             best_streak: 2,
+             robot?: false,
+             mode: :dogfight
+           } = winner
+
+    assert winner.best_contact > 0.4
+    assert Enum.find(results, &(&1.id == :b)).won? == false
+
+    restarted = play(over, round(4.0 / @dt) + 2)
+
+    assert ship(restarted, :a).tally.kills == 2 and ship(restarted, :a).tally.best_streak == 0 and
+             ship(restarted, :a).tally.best_contact < 0.4
+
+    left = Game.leave(restarted |> play(5), :a)
+
+    assert [{:result, %{id: :a, won?: false, kills: 0}}] =
+             left |> Game.drain_events() |> elem(0) |> Enum.filter(&match?({:result, _}, &1))
+  end
+
+  test "a duel: only the named pilots fly, the first to the kills wins, and the match stays over" do
+    game = Game.init(arena: arena(), seed: 1, only: ["a", "b"], first_to: 2)
+    assert {:error, :not_invited} = Game.join(game, :c, %{username: "c"})
+    assert {:ok, _} = Game.join(game, :w, %{username: "w", spectate: true})
+    game = game |> joined(:a, %{username: "a"}) |> joined(:b, %{username: "b"})
+    assert Game.outcome(Game.view(game, :a)) == nil
+
+    a = ship(game, :a) |> ExPilot.Ship.credit_kill() |> ExPilot.Ship.credit_kill()
+    over = %{game | ships: %{game.ships | a: a}} |> play(1)
+    assert over.round_over_in != nil
+    assert %{title: "Victory", next: :lobby} = Game.outcome(Game.view(over, :a))
+    assert %{title: "Defeat", next: :lobby} = Game.outcome(Game.view(over, :b))
+    {events, over} = Game.drain_events(over)
+
+    assert Enum.any?(
+             events,
+             &match?({:result, %{name: "a", won?: true, kills: 2, mode: :duel}}, &1)
+           )
+
+    later = play(over, round(4.0 / @dt) + 10)
+    assert later.round_over_in != nil
+    assert %{title: "Victory"} = Game.outcome(Game.view(later, :a))
+    assert Game.mode(over) == :duel
   end
 
   test "when everyone is out a new round starts with lives back" do
@@ -206,8 +341,10 @@ defmodule ExPilot.GameTest do
 
   test "with limited lives the round ends when one ship is left standing: the survivor is told, and after a pause everyone is back" do
     game = game(lives: 1) |> joined(:a) |> joined(:b) |> joined(:c)
-    out = fn ship -> %{ship | alive?: false, lives: 0, respawn_in: 0.0} end
-    last = %{game | ships: %{game.ships | b: out.(ship(game, :b)), c: out.(ship(game, :c))}} |> play(1)
+    out = fn ship -> Ship.timer(%{ship | alive?: false, lives: 0}, :respawn_in, 0.0) end
+
+    last =
+      %{game | ships: %{game.ships | b: out.(ship(game, :b)), c: out.(ship(game, :c))}} |> play(1)
 
     assert last.round_over_in != nil
     assert Enum.any?(last.messages, fn {_, text} -> text =~ "won the round" end)
@@ -227,13 +364,16 @@ defmodule ExPilot.GameTest do
     assert solo.round_over_in == nil
 
     game = game() |> joined(:a) |> joined(:b)
-    out = fn ship -> %{ship | alive?: false, lives: :unlimited, respawn_in: 0.0} end
+    out = fn ship -> Ship.timer(%{ship | alive?: false, lives: :unlimited}, :respawn_in, 0.0) end
     still = %{game | ships: %{game.ships | b: out.(ship(game, :b))}} |> play(1)
     assert still.round_over_in == nil
   end
 
   test "the same seed and calls give the same game" do
-    run = fn -> game(seed: 3) |> joined(:a) |> holding(:a, [:thrust, :fire, :turn_left]) |> play(200) end
+    run = fn ->
+      game(seed: 3) |> joined(:a) |> holding(:a, [:thrust, :fire, :turn_left]) |> play(200)
+    end
+
     assert run.() == run.()
   end
 
@@ -246,20 +386,27 @@ defmodule ExPilot.GameTest do
     assert :fire in events(game)
 
     assert ship(game, :a).alive?
-    assert ship(game, :a).deaths == 0
+    assert ship(game, :a).tally.deaths == 0
     refute :kill in events(game)
   end
 
   test "killing a ship is credited to the shooter and costs the shooter nothing" do
     game = game() |> joined(:a) |> joined(:b)
-    b = %{ship(game, :b) | body: %{ship(game, :b).body | pos: {3.5, 6.5}, heading: 16}, immune_until: 0.0}
+
+    b =
+      %{
+        ship(game, :b)
+        | body: %{ship(game, :b).body | pos: {3.5, 6.5}, heading: 16}
+      }
+      |> Ship.timer(:immune_until, 0.0)
+
     a = %{ship(game, :a) | body: %{ship(game, :a).body | heading: 48}}
     game = %{game | ships: %{a: a, b: b}} |> holding(:a, [:fire]) |> play(30)
 
     refute ship(game, :b).alive?
     assert ship(game, :a).alive?
-    assert ship(game, :a).deaths == 0
-    assert ship(game, :a).kills == 1
+    assert ship(game, :a).tally.deaths == 0
+    assert ship(game, :a).tally.kills == 1
     assert Enum.count(events(game), &(&1 == :kill)) == 1
   end
 
@@ -270,7 +417,13 @@ defmodule ExPilot.GameTest do
     {x, y} = pos
 
     assert {:shield, {x - 0.5, y - 0.5}} in movers
-    refute {:shield, {x - 0.5, y - 0.5}} in (game() |> joined(:a) |> play(round(3.2 / @dt)) |> ExPilot.Game.view(:a) |> ExPilot.Client.scene() |> Map.fetch!(:movers))
+
+    refute {:shield, {x - 0.5, y - 0.5}} in (game()
+                                             |> joined(:a)
+                                             |> play(round(3.2 / @dt))
+                                             |> ExPilot.Game.view(:a)
+                                             |> ExPilot.Client.scene()
+                                             |> Map.fetch!(:movers))
   end
 
   test "held turn keys steer even while an aim is set" do
@@ -287,7 +440,7 @@ defmodule ExPilot.GameTest do
 
   test "a ship with no lives left watches the nearest living ship" do
     game = game(lives: 1) |> joined(:a) |> joined(:b) |> joined(:c)
-    dead = %{ship(game, :a) | alive?: false, lives: 0, respawn_in: 0.0}
+    dead = Ship.timer(%{ship(game, :a) | alive?: false, lives: 0}, :respawn_in, 0.0)
     far = %{ship(game, :b) | body: %{ship(game, :b).body | pos: {20.0, 9.0}}}
     near = %{ship(game, :c) | body: %{ship(game, :c).body | pos: {5.0, 3.0}}}
     game = %{game | ships: %{a: dead, b: far, c: near}}
@@ -296,11 +449,14 @@ defmodule ExPilot.GameTest do
     assert view.focus == {5.0, 3.0}
     assert view.watching == ship(game, :c).name
     assert Game.outcome(view) == nil
+    assert ExPilot.Client.scene(view).subject == ship(game, :c).name
+    assert ExPilot.Client.scene(Game.view(game, :b)).subject == :b
+    assert ExPilot.Client.scene(Game.view(game, :nobody)).subject == :free
   end
 
   test "the round is over for a player when every other ship is out, or when everyone including them is" do
     game = game(lives: 1) |> joined(:a) |> joined(:b)
-    out = fn ship -> %{ship | alive?: false, lives: 0, respawn_in: 0.0} end
+    out = fn ship -> Ship.timer(%{ship | alive?: false, lives: 0}, :respawn_in, 0.0) end
 
     won = %{game | ships: %{a: ship(game, :a), b: out.(ship(game, :b))}}
     assert %{title: "Victory", lines: lines, next: :next_arena} = Game.outcome(Game.view(won, :a))
@@ -318,7 +474,7 @@ defmodule ExPilot.GameTest do
   test "the view counts the enemies still in the round" do
     game = game(lives: 1) |> joined(:a) |> joined(:b) |> joined(:c)
     assert Game.view(game, :a).enemies == 2
-    out = %{ship(game, :c) | alive?: false, lives: 0, respawn_in: 0.0}
+    out = Ship.timer(%{ship(game, :c) | alive?: false, lives: 0}, :respawn_in, 0.0)
     assert Game.view(%{game | ships: %{game.ships | c: out}}, :a).enemies == 1
   end
 

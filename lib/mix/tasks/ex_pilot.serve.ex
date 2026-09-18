@@ -20,18 +20,55 @@ defmodule Mix.Tasks.ExPilot.Serve do
       account each). Default `$XDG_DATA_HOME/expilot/accounts.terms`
     * `--maps` — a directory of map files, or one file. Default: the bundled maps
     * `--robots` — robots per arena
+    * `--beacon-port` — the UDP port the server calls on for the local network, `0` to
+      keep quiet. Default: `beacon_port` in the config, else 2299
+    * `--music` — the browsers' and desktops' music: `personal` (each session its own,
+      following its own view, the default), `arena` (one stage a world, shared),
+      `dynamic` (personal, at a rate the load sets), `static` (the first section each
+      session is cued, rendered once and looped — a recording, not a performance) or
+      `off`
+    * `--sfx` — their effects: `personal` (default) or `off`
   """
 
   use Mix.Task
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: [port: :integer, ip: :string, http: :integer, accounts: :string, maps: :string, robots: :integer], aliases: [p: :http])
+    {opts, _} =
+      OptionParser.parse!(args,
+        strict: [
+          port: :integer,
+          ip: :string,
+          http: :integer,
+          accounts: :string,
+          maps: :string,
+          robots: :integer,
+          beacon_port: :integer,
+          music: :string,
+          sfx: :string
+        ],
+        aliases: [p: :http]
+      )
+
+    opts =
+      opts
+      |> choice(:music, ~w(personal arena dynamic static off))
+      |> choice(:sfx, ~w(personal off))
+
+    opts =
+      case Keyword.pop(opts, :beacon_port) do
+        {nil, opts} -> opts
+        {0, opts} -> Keyword.put(opts, :beacon, false)
+        {port, opts} -> Keyword.put(opts, :beacon_port, port)
+      end
+
     Mix.Task.run("app.start")
 
     server_opts =
-      [port: Keyword.get(opts, :port, 2222)] ++ ip_opt(Keyword.get(opts, :ip)) ++ Keyword.take(opts, [:accounts, :http]) ++
-        maps_opt(Keyword.get(opts, :maps)) ++ Keyword.take(opts, [:robots])
+      [port: Keyword.get(opts, :port, 2222)] ++
+        ip_opt(Keyword.get(opts, :ip)) ++
+        Keyword.take(opts, [:accounts, :http]) ++
+        maps_opt(Keyword.get(opts, :maps)) ++ Keyword.take(opts, [:robots, :music, :sfx])
 
     case ExPilot.Server.start(server_opts) do
       {:ok, %{arenas: arenas, http: http}} ->
@@ -40,6 +77,19 @@ defmodule Mix.Tasks.ExPilot.Serve do
 
       {:error, reason} ->
         Mix.raise("could not start: #{inspect(reason)}")
+    end
+  end
+
+  defp choice(opts, key, allowed) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        opts
+
+      {:ok, value} ->
+        if value in allowed,
+          do: Keyword.put(opts, key, String.to_atom(value)),
+          else:
+            Mix.raise("--#{key} takes one of #{Enum.join(allowed, ", ")}, not #{inspect(value)}")
     end
   end
 
@@ -66,7 +116,10 @@ defmodule Mix.Tasks.ExPilot.Serve do
   end
 
   defp web_line(_host, nil), do: "  no web pages (--http 0)"
-  defp web_line(host, http), do: "  in a browser:  http://#{host}:#{http}/            (log in or make an account, then play)"
+
+  defp web_line(host, http),
+    do:
+      "  in a browser:  http://#{host}:#{http}/            (log in or make an account, then play)"
 
   defp ip_opt(nil), do: []
 

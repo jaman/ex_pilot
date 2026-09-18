@@ -1,24 +1,20 @@
 defmodule ExPilot.Arenas do
   @moduledoc """
-  The arenas a server offers: a map each, with a `Cauldron2D.World` and its robots under
-  `ExPilot.ArenaSupervisor` that start on the first join and stop again once no player
-  has been in them for a while.
+  ExPilot's arenas on `Cauldron2D.Arenas`: a map each, its world an `ExPilot.Game`,
+  its robots (`ExPilot.Robot`) and its ledger recorder seated beside it.
 
       :ok = ExPilot.Arenas.register(:dogfight, "priv/maps/dogfight.map.gz")
       ExPilot.Arenas.list()
       Cauldron2D.Player.join(ExPilot.Arenas.world_name(:dogfight), "alice", %{})
 
-  `register/3` makes an arena known; `world_name/1` names its world, and any call to
-  that name starts the world and seats the robots if they are not running.
-  `ExPilot.Arenas.Sweeper` closes worlds that have had no human in them for
-  its `:idle_after`. `list/0` is what the lobby shows, running or not, from the
-  `ExPilot.Arenas.Table`. The map of a registered arena is kept under its name for the
-  client to draw from; `map/1` reads it.
+  The map of a registered arena is kept under its name for the clients to draw from;
+  `map/1` reads it, `adopt/2` keeps a map that came from another node. Everything else
+  — starting on the first join, stopping when idle, `humans/1`, `running/1` — is
+  `Cauldron2D.Arenas`'s.
   """
 
-  alias Cauldron2D.World
-  alias ExPilot.{Map, Robot}
-  alias ExPilot.Arenas.Table
+  alias Cauldron2D.Arenas
+  alias ExPilot.{Map, Mode, Robot}
 
   @type id :: atom()
 
@@ -27,148 +23,118 @@ defmodule ExPilot.Arenas do
 
   ## Options
 
-    * `:robots` — how many robots to seat, never more than the map's bases less one.
-      Default: the map's `maxrobots`
+    * `:robots` — how many robots to seat, never more than the map's bases less one for
+      every human in it and one to spare. Default: the map's `maxrobots`
     * `:hz` — the world's tick rate. Default `50`
-    * `:seed` — the game's seed. Default: unique
+    * `:seed`, `:lives`, `:only`, `:first_to` — the game's, as `ExPilot.Game.init/1` takes them
+    * `:note` — what the lobby says of the arena. Default: its size and robots
+    * `:mode` — its kind in the lobby. Default: `ExPilot.Game.mode/1` of the map
   """
   @spec register(id(), Path.t() | Map.t(), keyword()) :: :ok | {:error, term()}
   def register(id, path_or_map, opts \\ []) do
     with {:ok, arena} <- load(path_or_map) do
       name = Map.name(arena)
-      :persistent_term.put({__MODULE__, :map, name}, arena)
-      Table.put(id, %{id: id, name: name, opts: opts, note: note(arena), teams: teams(arena), mode: ExPilot.Game.mode(arena)})
-      :ok
+      adopt(name, arena)
+      mode = Keyword.get(opts, :mode, ExPilot.Game.mode(arena))
+      robots = Keyword.get(opts, :robots, Map.option(arena, :maxrobots))
+      bases = length(Map.bases(arena))
+
+      Arenas.register(id,
+        game: ExPilot.Game,
+        game_opts: [arena: arena] ++ Keyword.take(opts, [:seed, :lives, :only, :first_to]),
+        hz: Keyword.get(opts, :hz, 50),
+        name: Atom.to_string(id),
+        map: name,
+        note: Keyword.get(opts, :note, note(arena)),
+        kind: Mode.kind(mode),
+        teams: teams(arena),
+        children: fn %{id: id, world: world, humans: humans} ->
+          children(id, world, min(robots, bases - 1 - humans))
+        end
+      )
     end
+  end
+
+  defp children(id, world, robots) do
+    recorder = %{
+      id: {:recorder, id},
+      start:
+        {Cauldron2D.Ledger.Recorder, :start_link,
+         [
+           [
+             world: world,
+             arena: Atom.to_string(id),
+             ledger: ExPilot.Ledger,
+             on_result: &ExPilot.Duels.result(id, &1)
+           ]
+         ]},
+      restart: :transient
+    }
+
+    seats =
+      for n <- 1..max(robots, 0)//1 do
+        %{
+          id: {:robot, id, n},
+          start:
+            {Cauldron2D.Robot, :start_link,
+             [[brain: Robot, world: world, number: n, brain_opts: [arena: id]]]},
+          restart: :transient
+        }
+      end
+
+    [recorder | seats]
   end
 
   @doc "Register arena `id` and start its world and robots at once."
   @spec open(id(), Path.t() | Map.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def open(id, path_or_map, opts \\ []) do
-    with :ok <- register(id, path_or_map, opts), do: start(id)
-  end
-
-  @doc "Start the world and robots of registered arena `id`; the running pid if it already is."
-  @spec start(id()) :: {:ok, pid()} | {:error, term()}
-  def start(id) do
-    case Table.get(id) do
-      nil ->
-        {:error, :unknown_arena}
-
-      %{name: name, opts: opts} ->
-        arena = map(name)
-
-        spec = %{
-          id: {:world, id},
-          start:
-            {World, :start_link,
-             [
-               [
-                 game: ExPilot.Game,
-                 game_opts: [arena: arena] ++ Keyword.take(opts, [:seed]),
-                 hz: Keyword.get(opts, :hz, 50),
-                 name: {:via, Registry, {ExPilot.Registry, {:world, id}}}
-               ]
-             ]},
-          restart: :transient
-        }
-
-        case DynamicSupervisor.start_child(ExPilot.ArenaSupervisor, spec) do
-          {:ok, pid} ->
-            seat_robots(id, min(Keyword.get(opts, :robots, Map.option(arena, :maxrobots)), length(Map.bases(arena)) - 1))
-            {:ok, pid}
-
-          {:error, {:already_started, pid}} ->
-            {:ok, pid}
-
-          other ->
-            other
-        end
-    end
+    with :ok <- register(id, path_or_map, opts), do: Arenas.start(id)
   end
 
   defp load(%Map{} = arena), do: {:ok, arena}
   defp load(path) when is_binary(path), do: Map.parse_file(path)
 
-  defp seat_robots(id, count), do: seat_robots(id, Enum.to_list(1..count//1), [])
-
-  defp seat_robots(id, numbers, seated) do
-    for n <- numbers, n not in seated do
-      DynamicSupervisor.start_child(ExPilot.ArenaSupervisor, %{
-        id: {:robot, id, n},
-        start: {Robot, :start_link, [[world: world_name(id), number: n, arena: id]]},
-        restart: :transient
-      })
-    end
-
-    :ok
-  end
-
-  @doc """
-  Seat the robots arena `id` is short of: as many as it was opened with, never more than
-  the map's bases less one for every human in it and one to spare. A robot that left to
-  make room for a player comes back this way once the player has gone.
-  """
-  @spec reseat(id()) :: :ok
-  def reseat(id) do
-    with %{opts: opts, name: name} <- Table.get(id), true <- running?(id), %Map{} = arena <- map(name) do
-      seated = Registry.select(ExPilot.Registry, [{{{:robot, id, :"$1"}, :_, :_}, [], [:"$1"]}])
-      wanted = min(Keyword.get(opts, :robots, Map.option(arena, :maxrobots)), length(Map.bases(arena)) - 1 - length(humans(id)))
-      numbers = Enum.take(Enum.reject(1..max(wanted, 0)//1, &(&1 in seated)), max(wanted - length(seated), 0))
-      seat_robots(id, numbers, seated)
-    else
-      _ -> :ok
-    end
-  end
-
   @doc "The name of arena `id`'s world; using it starts the world when it is not running."
   @spec world_name(id()) :: GenServer.name()
-  def world_name(id), do: {:via, __MODULE__.OnDemand, id}
+  def world_name(id), do: Arenas.world_name(id)
 
-  @doc "The pid of arena `id`'s world while it runs, else `nil`."
-  @spec running(id()) :: pid() | nil
-  def running(id) do
-    case Registry.lookup(ExPilot.Registry, {:world, id}) do
-      [{pid, _}] -> pid
-      [] -> nil
-    end
-  end
-
-  @doc "Whether arena `id`'s world is running."
-  @spec running?(id()) :: boolean()
-  def running?(id), do: running(id) != nil
+  @doc "Keep `arena` as the map called `name`, for a client on another node whose worlds run there; `map/1` finds it."
+  @spec adopt(String.t(), Map.t()) :: :ok
+  def adopt(name, %Map{} = arena), do: :persistent_term.put({__MODULE__, :map, name}, arena)
 
   @doc "The map a registered arena plays on, by the map's name."
   @spec map(String.t()) :: Map.t() | nil
   def map(name), do: :persistent_term.get({__MODULE__, :map, name}, nil)
 
-  @doc "Every registered arena, as the lobby lists them, with the humans in each."
-  @spec list() :: [Cauldron2D.Drafter.Client.Game.arena()]
-  def list do
-    for %{id: id, name: name, note: note, teams: teams, mode: mode} <- Table.all() do
-      %{id: id, name: Atom.to_string(id), world: world_name(id), players: length(humans(id)), map: name, note: note, teams: teams, mode: mode}
+  @doc "Every registered arena, as the lobby lists them, with the humans in each and its `mode` beside the kind."
+  @spec list() :: [Cauldron2D.Client.Game.arena()]
+  def list,
+    do: for(arena <- Arenas.list(), do: Elixir.Map.put(arena, :mode, Mode.of_kind(arena.kind)))
+
+  @doc "The map name and tick rate arena `id` was registered with, for an arena cut from the same map; `nil` for an unknown id."
+  @spec registration(id()) :: %{map: String.t(), hz: pos_integer()} | nil
+  def registration(id) do
+    case Arenas.Table.get(id) do
+      %{opts: opts} -> %{map: Keyword.fetch!(opts, :map), hz: Keyword.fetch!(opts, :hz)}
+      nil -> nil
     end
-    |> Enum.sort_by(& &1.name)
   end
 
   @doc "The players in arena `id` who are not robots; `[]` while it is not running."
   @spec humans(id()) :: [term()]
-  def humans(id) do
-    case running(id) do
-      nil -> []
-      pid -> pid |> players() |> Enum.reject(&match?({:robot, _}, &1))
-    end
-  end
+  def humans(id), do: Arenas.humans(id)
 
-  defp players(pid) do
-    World.players(pid)
-  catch
-    :exit, _stopped_meanwhile -> []
-  end
+  @doc "Whether arena `id`'s world is running."
+  @spec running?(id()) :: boolean()
+  def running?(id), do: Arenas.running?(id)
 
-  @doc "The ids of every arena whose world is running."
-  @spec running_ids() :: [id()]
-  def running_ids, do: Registry.select(ExPilot.Registry, [{{{:world, :"$1"}, :_, :_}, [], [:"$1"]}])
+  @doc "Stop arena `id`'s world and robots, keeping it registered; `close/1` removes it."
+  @spec stop(id()) :: :ok
+  def stop(id), do: Arenas.stop(id)
+
+  @doc "Stop arena `id` and remove it from the list."
+  @spec close(id()) :: :ok
+  def close(id), do: Arenas.close(id)
 
   defp note(arena) do
     {width, height} = Map.size(arena)
@@ -180,30 +146,14 @@ defmodule ExPilot.Arenas do
   end
 
   defp teams(arena) do
-    if Map.option(arena, :teamplay), do: team_numbers(arena), else: []
-  end
-
-  defp team_numbers(arena) do
-    arena |> Map.bases() |> Enum.map(& &1.team) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort()
-  end
-
-  @doc "Stop arena `id`'s world and robots, keeping it registered; `close/1` removes it."
-  @spec stop(id()) :: :ok
-  def stop(id) do
-    robots = Registry.select(ExPilot.Registry, [{{{:robot, id, :_}, :"$1", :_}, [], [:"$1"]}])
-
-    for pid <- robots ++ List.wrap(running(id)), is_pid(pid) do
-      DynamicSupervisor.terminate_child(ExPilot.ArenaSupervisor, pid)
-    end
-
-    :ok
-  end
-
-  @doc "Stop arena `id` and remove it from the list."
-  @spec close(id()) :: :ok
-  def close(id) do
-    stop(id)
-    Table.delete(id)
-    :ok
+    if Map.option(arena, :teamplay),
+      do:
+        arena
+        |> Map.bases()
+        |> Enum.map(& &1.team)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+        |> Enum.sort(),
+      else: []
   end
 end
