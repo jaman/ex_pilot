@@ -1,7 +1,7 @@
 defmodule ExPilot.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.1.2"
   @source_url "https://github.com/jaman/ex_pilot"
   @description "An XPilot for the terminal, over ssh, in the browser and on the desktop, on Cauldron."
 
