@@ -1,7 +1,7 @@
 defmodule ExPilot.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/jaman/ex_pilot"
   @description "An XPilot for the terminal, over ssh, in the browser and on the desktop, on Cauldron."
 
@@ -60,7 +60,8 @@ defmodule ExPilot.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib config priv/maps/dogfight.map.gz priv/scores priv/static mix.exs README.md)
+      files:
+        ~w(lib config priv/maps/dogfight.map.gz priv/scores priv/static mix.exs README.md TECHNICAL.md)
     ]
   end
 
@@ -69,7 +70,7 @@ defmodule ExPilot.MixProject do
       main: "readme",
       source_ref: "v#{@version}",
       source_url_pattern: "#{@source_url}/blob/v#{@version}/%{path}#L%{line}",
-      extras: ["README.md"]
+      extras: ["README.md", "TECHNICAL.md"]
     ]
   end
 end

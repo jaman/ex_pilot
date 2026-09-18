@@ -2,8 +2,7 @@ defmodule ExPilot.Guide do
   @moduledoc """
   What everything in the arena is: the things on the map, the weapons, and every item
   with the key that uses it, in sections of entries with the art the atlas draws them
-  with. `ExPilot.Client.guide/0` shows it in the terminal, the web's guide page in the
-  browser.
+  with. The terminal shows it from the title and the lobby, the browser on its guide page.
 
       ExPilot.Guide.sections()
   """
