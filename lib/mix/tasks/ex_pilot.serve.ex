@@ -75,6 +75,11 @@ defmodule Mix.Tasks.ExPilot.Serve do
         Mix.shell().info(splash(server_opts[:port], arenas, http))
         Process.sleep(:infinity)
 
+      {:error, {:ledger_held, pid}} ->
+        Mix.raise(
+          "the ledger #{ExPilot.Ledger.path()} is held by process #{pid}; is another ExPilot running?"
+        )
+
       {:error, reason} ->
         Mix.raise("could not start: #{inspect(reason)}")
     end

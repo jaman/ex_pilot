@@ -44,6 +44,7 @@ defmodule ExPilot.WebTest do
         settings: %{sfx: 0.9, music: 0.9}
       })
 
+    :ok = Drafter.Accounts.register(accounts, "bob", "bobs password")
     :ok = Arenas.register(:webtest, @fixture, robots: 1)
 
     on_exit(fn ->
@@ -56,6 +57,14 @@ defmodule ExPilot.WebTest do
   end
 
   defp logged_in(conn), do: conn |> get("/session?token=" <> Auth.token("alice")) |> recycle()
+
+  defp shows(view, text, tries \\ 50) do
+    cond do
+      render(view) =~ text -> true
+      tries == 0 -> render(view)
+      true -> Process.sleep(20) && shows(view, text, tries - 1)
+    end
+  end
 
   test "the login page takes a name and password, refuses a wrong one, and sends a right one into the lobby",
        %{conn: conn} do
@@ -83,20 +92,41 @@ defmodule ExPilot.WebTest do
     render_click(view, "toggle")
 
     assert render_submit(view, "register", %{
-             "username" => "bob",
-             "password" => "bobs password",
+             "username" => "carol",
+             "password" => "carols password",
              "again" => "other"
            }) =~ "differ"
 
     assert {:error, {:redirect, %{to: "/session?token=" <> token}}} =
              render_submit(view, "register", %{
-               "username" => "bob",
-               "password" => "bobs password",
-               "again" => "bobs password"
+               "username" => "carol",
+               "password" => "carols password",
+               "again" => "carols password"
              })
 
-    assert {:ok, "bob"} = Auth.verify(token)
-    assert {:ok, _} = Auth.login("bob", "bobs password")
+    assert {:ok, "carol"} = Auth.verify(token)
+    assert {:ok, _} = Auth.login("carol", "carols password")
+  end
+
+  test "every page carries the pilots panel: a count in the bar, a scrollable list that slides open, one session per page",
+       %{conn: conn} do
+    {:ok, view, _html} = live(logged_in(conn), "/leaders")
+    panel = find_live_child(view, "pilots")
+    assert shows(view, ~r/1 pilot<\/span>/) == true
+    assert Enum.count(ExPilot.Roster.online(), &(&1.id == "alice")) == 1
+    refute render(panel) =~ ~s(class="pilots open")
+
+    html = panel |> element("button.pilots-toggle") |> render_click()
+    assert html =~ ~s(class="pilots open")
+    assert html =~ ~r/<li[^>]*>.*#{ExPilot.Alias.of("alice")}.*in the lobby.*<\/li>/s
+
+    world = Arenas.world_name(:webtest)
+    :ok = Cauldron2D.Player.join(world, "bob", %{username: "bob"})
+    on_exit(fn -> Cauldron2D.Player.leave(world, "bob") end)
+    assert shows(panel, ~r/2 pilots<\/span>/) == true
+    assert render(panel) =~ ~r/#{ExPilot.Alias.of("bob")}.*in webtest/s
+
+    refute render_keydown(panel, "close", %{"key" => "Escape"}) =~ ~s(class="pilots open")
   end
 
   test "the lobby needs a login and lists the arenas with a way in", %{conn: conn} do
@@ -106,9 +136,10 @@ defmodule ExPilot.WebTest do
     assert html =~ "webtest"
     assert html =~ "nobody flying"
     :ok = Cauldron2D.Player.join(Arenas.world_name(:webtest), "bob", %{username: "bob"})
-    assert render(view) =~ "1 pilot flying"
+    assert shows(view, "1 pilot flying") == true
+    assert render(view) =~ "in webtest"
     Cauldron2D.Player.leave(Arenas.world_name(:webtest), "bob")
-    assert render(view) =~ "nobody flying"
+    assert shows(view, "nobody flying") == true
     assert html =~ "Dogfight... 6 bases"
     assert html =~ ~s(href="/arena/webtest")
     assert html =~ ~s(href="/arena/webtest?spectate=1")
@@ -311,6 +342,58 @@ defmodule ExPilot.WebTest do
     assert Enum.any?(board, &(&1.name == "dan"))
   end
 
+  test "the lobby lists who is online under the names they are seen as, and tells the player how they are seen",
+       %{conn: conn} do
+    world = Arenas.world_name(:webtest)
+    :ok = Cauldron2D.Player.join(world, "bob", %{username: "bob"})
+    on_exit(fn -> Cauldron2D.Player.leave(world, "bob") end)
+    Process.sleep(100)
+
+    {:ok, _view, html} = live(logged_in(conn), "/lobby")
+    assert html =~ "Pilots online"
+    assert html =~ ExPilot.Alias.of("bob")
+    assert html =~ "in webtest"
+    refute html =~ ~r/<span class="mono">bob<\/span>/
+    assert html =~ "<b>alice</b>"
+    assert html =~ "seen as #{ExPilot.Alias.of("alice")}"
+  end
+
+  test "the admin page is for admins only, shows sessions, accounts and what happened, and acts on them",
+       %{conn: conn} do
+    assert {:error, {:redirect, %{to: "/lobby"}}} = live(logged_in(conn), "/admin")
+
+    :ok = Auth.put_admin("alice", true)
+    world = Arenas.world_name(:webtest)
+    :ok = Cauldron2D.Player.join(world, "bob", %{username: "bob"})
+    on_exit(fn -> Cauldron2D.Player.leave(world, "bob") end)
+    Process.sleep(100)
+
+    {:ok, view, html} = live(logged_in(conn), "/admin")
+    assert html =~ "Admin"
+
+    assert html =~
+             ~r/<td class="mono">bob<\/td><td class="mono">#{ExPilot.Alias.of("bob")}<\/td><td>desktop<\/td><td>in webtest<\/td>/
+
+    assert html =~
+             ~r/<td class="mono">alice<\/td><td class="mono">#{ExPilot.Alias.of("alice")}<\/td><td>browser<\/td><td>lobby<\/td>/
+
+    assert html =~ "logged in on a browser"
+
+    assert html =~ "webtest"
+    assert html =~ ~r/<td class="mono">alice<\/td>/
+    assert html =~ "(anonymous)"
+    assert html =~ "joined webtest"
+
+    html = render_click(view, "admin", %{"username" => "bob", "to" => "yes"})
+    assert Auth.admin?("bob")
+    assert html =~ "bob is an admin"
+
+    html = render_click(view, "kick", %{"id" => "bob", "arena" => "webtest"})
+    assert html =~ "kicked #{ExPilot.Alias.of("bob")}"
+    Process.sleep(100)
+    refute "bob" in Cauldron2D.World.players(world)
+  end
+
   test "the lobby challenges another pilot to a duel and lists it; only the two may fly it", %{
     conn: conn
   } do
@@ -318,10 +401,16 @@ defmodule ExPilot.WebTest do
     assert html =~ "Duels"
 
     html =
-      render_submit(view, "challenge", %{"to" => "bob", "arena" => "webtest", "first_to" => "3"})
+      render_submit(view, "challenge", %{
+        "to" => ExPilot.Alias.of("bob"),
+        "arena" => "webtest",
+        "first_to" => "3"
+      })
 
-    assert html =~ "bob is challenged on webtest, first to 3"
-    assert html =~ "alice vs bob"
+    assert html =~ "#{ExPilot.Alias.of("bob")} is challenged on webtest, first to 3"
+    refute html =~ "bob is challenged"
+    assert html =~ "#{ExPilot.Alias.of("alice")} vs #{ExPilot.Alias.of("bob")}"
+    refute html =~ "alice vs"
     assert html =~ ~r/href="\/arena\/duel_\d+"/
     duel = Enum.find(ExPilot.Duels.list(), &(&1.challenged == "bob" and &1.ended == nil))
     assert duel.first_to == 3
@@ -395,7 +484,7 @@ defmodule ExPilot.WebTest do
     assert <<137, "PNG", _::binary>> = conn.resp_body
   end
 
-  test "settings keep the browser's levels under their own key, beside the terminal's, and the nickname every client flies under",
+  test "settings keep the browser's levels under their own key, beside the terminal's, and the alias every client shows",
        %{conn: conn} do
     {:ok, view, html} = live(logged_in(conn), "/settings")
     assert html =~ "50%"
@@ -404,11 +493,20 @@ defmodule ExPilot.WebTest do
     assert Auth.levels("alice", :terminal) == %{sfx: 0.9, music: 0.9}
     assert Auth.levels("alice", :touch) == %{sfx: 0.85, music: 0.35}
 
-    render_submit(view, "nickname", %{"nickname" => "Ace"})
-    assert Auth.nickname("alice") == "Ace"
+    anonymous = ExPilot.Alias.anonymous("alice")
+    assert render(view) =~ "Others see you as <strong>#{anonymous}</strong>"
+
+    assert %{username: ^anonymous} =
+             ExPilot.Client.join_props(%{username: "alice", settings: %{}})
+
+    render_submit(view, "alias", %{"alias" => "Ace"})
+    assert ExPilot.Alias.of("alice") == "Ace"
+    assert render(view) =~ "Others see you as <strong>Ace</strong>"
     assert %{username: "Ace"} = ExPilot.Client.join_props(%{username: "alice", settings: %{}})
-    render_submit(view, "nickname", %{"nickname" => ""})
-    assert Auth.nickname("alice") == "alice"
+    assert ExPilot.Client.player_label("alice") == "Ace"
+
+    render_submit(view, "alias", %{"alias" => ""})
+    assert ExPilot.Alias.of("alice") == anonymous
   end
 
   test "a browser player joins the world through the channel, gets the sheet, the map and frames, and steers" do
@@ -420,7 +518,9 @@ defmodule ExPilot.WebTest do
     assert_push("map", %{width: 120, height: 120, wrap: true}, 2_000)
     assert_push("frame", %{focus: [_, _], movers: movers, hud: hud}, 2_000)
     assert Enum.any?(movers, fn [index, _, _] -> is_integer(index) end)
-    assert Enum.any?(hud, fn row -> Enum.any?(row, fn [text, _] -> text =~ "alice" end) end)
+    seen_as = ExPilot.Alias.of("alice")
+    assert Enum.any?(hud, fn row -> Enum.any?(row, fn [text, _] -> text =~ seen_as end) end)
+    refute Enum.any?(hud, fn row -> Enum.any?(row, fn [text, _] -> text =~ "alice" end) end)
 
     world = Arenas.world_name(:webtest)
     assert "alice" in Cauldron2D.World.players(world)

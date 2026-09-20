@@ -22,7 +22,7 @@ defmodule ExPilot.Client do
 
   alias Cauldron2D.Net.Link
   alias Cauldron2D.Net.Remote
-  alias ExPilot.{Arenas, Art, Game, Gear, Guide, Map, Mode, Music, Radar, Sound}
+  alias ExPilot.{Alias, Arenas, Art, Game, Gear, Guide, Map, Mode, Music, Radar, Sound}
   alias ExPilot.Client.{LeadersPage, SoundPage}
 
   @colours %{
@@ -118,7 +118,7 @@ defmodule ExPilot.Client do
       end
 
     shape
-    |> Elixir.Map.merge(nickname_prop(username))
+    |> Elixir.Map.merge(seen_as(username))
     |> Elixir.Map.merge(param_props(Elixir.Map.get(props, :params, %{})))
   end
 
@@ -134,15 +134,7 @@ defmodule ExPilot.Client do
     end
   end
 
-  defp nickname_prop(username) do
-    case Process.whereis(ExPilot.Accounts) && Drafter.Accounts.fetch(ExPilot.Accounts, username) do
-      {:ok, %{props: %{nickname: nickname}}} when is_binary(nickname) and nickname != "" ->
-        %{username: nickname}
-
-      _ ->
-        %{}
-    end
-  end
+  defp seen_as(username), do: %{username: Alias.of(username)}
 
   @impl true
   def arenas(%{source: {:node, node}}) do
@@ -217,7 +209,9 @@ defmodule ExPilot.Client do
 
   @impl true
   def player_label({:robot, n}), do: "Robot #{n}"
-  def player_label(id) when is_binary(id), do: id
+
+  def player_label(id) when is_binary(id), do: Alias.of(id)
+
   def player_label(id), do: inspect(id)
 
   @impl true

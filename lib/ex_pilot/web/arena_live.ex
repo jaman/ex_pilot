@@ -74,7 +74,7 @@ defmodule ExPilot.Web.ArenaLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <.shell username={@username} current="arena" wide={true}>
+    <.shell socket={@socket} username={@username} admin?={@admin?} current="arena" wide={true}>
       <div class="arena-page">
         <div class="arena-bar">
           <a href="/lobby">← arenas</a>

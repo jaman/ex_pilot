@@ -1,7 +1,8 @@
 defmodule ExPilot.Web.Auth do
   @moduledoc """
   Who a browser player is: login against the server's `Drafter.Accounts`, the signed
-  token a page hands its socket, and the sound levels kept in the account.
+  token a page hands its socket, and the sound levels kept in the account. The name a
+  player is seen under is `ExPilot.Alias`'s.
 
   The accounts server is `ExPilot.Accounts`, as `ExPilot.Server.start/1` names it.
   """
@@ -9,6 +10,7 @@ defmodule ExPilot.Web.Auth do
   import Phoenix.Component, only: [assign: 3]
 
   alias Cauldron2D.Drafter.Client.Settings
+  alias Cauldron2D.Sessions
   alias Drafter.Accounts
   alias ExPilot.Web.Endpoint
 
@@ -82,6 +84,11 @@ defmodule ExPilot.Web.Auth do
   def kind("touch"), do: :touch
   def kind(_other), do: :web
 
+  defp track(socket, username) do
+    kind = socket |> Phoenix.LiveView.get_connect_params() |> Map.get("kind") |> kind()
+    Sessions.track(username, kind)
+  end
+
   defp settings(username, kind) do
     key = Settings.prop_key(kind)
 
@@ -91,33 +98,39 @@ defmodule ExPilot.Web.Auth do
     end
   end
 
-  @doc "The name the account plays under: its nickname, else its username."
-  @spec nickname(String.t()) :: String.t()
-  def nickname(username) do
-    case Accounts.fetch(ExPilot.Accounts, username) do
-      {:ok, %{props: %{nickname: nickname}}} when is_binary(nickname) and nickname != "" ->
-        nickname
-
-      _ ->
-        username
-    end
+  @doc "Whether the account is an admin: `admin: true` among its props, given with `put_admin/2` or `mix ex_pilot.admin`."
+  @spec admin?(String.t()) :: boolean()
+  def admin?(username) do
+    match?({:ok, %{props: %{admin: true}}}, Accounts.fetch(ExPilot.Accounts, username))
   end
 
-  @doc "Keep the account's nickname; blank means none. `{:error, :taken}` when another account plays under it."
-  @spec put_nickname(String.t(), String.t()) :: :ok | {:error, :taken | term()}
-  def put_nickname(username, nickname) do
-    nickname = String.trim(nickname)
-    Accounts.put_props(ExPilot.Accounts, username, %{nickname: nickname})
-  end
+  @doc "Make the account an admin, or not."
+  @spec put_admin(String.t(), boolean()) :: :ok | {:error, term()}
+  def put_admin(username, admin?) when is_boolean(admin?),
+    do: Accounts.put_props(ExPilot.Accounts, username, %{admin: admin?})
 
-  @doc "The `on_mount` hook of the player's pages: the session's username, or back to the login."
+  @doc """
+  The `on_mount` hooks of the pages: `:require` puts the session's username and whether
+  they are an admin in the socket, lists the page in `Cauldron2D.Sessions` under the
+  kind of client, or sends a stranger back to the login; `:admin` also turns away a
+  player who is not an admin, to the lobby.
+  """
   def on_mount(:require, _params, session, socket) do
     case session do
       %{"username" => username} when is_binary(username) ->
-        {:cont, assign(socket, :username, username)}
+        if Phoenix.LiveView.connected?(socket), do: track(socket, username)
+        {:cont, socket |> assign(:username, username) |> assign(:admin?, admin?(username))}
 
       _ ->
         {:halt, Phoenix.LiveView.redirect(socket, to: "/")}
+    end
+  end
+
+  def on_mount(:admin, params, session, socket) do
+    with {:cont, socket} <- on_mount(:require, params, session, socket) do
+      if admin?(socket.assigns.username),
+        do: {:cont, socket},
+        else: {:halt, Phoenix.LiveView.redirect(socket, to: "/lobby")}
     end
   end
 end

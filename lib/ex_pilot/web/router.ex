@@ -50,5 +50,9 @@ defmodule ExPilot.Web.Router do
       live("/guide", GuideLive)
       live("/leaders", LeadersLive)
     end
+
+    live_session :admin, on_mount: {ExPilot.Web.Auth, :admin} do
+      live("/admin", AdminLive)
+    end
   end
 end

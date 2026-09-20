@@ -21,7 +21,7 @@ defmodule ExPilot.Duels do
 
   use GenServer
 
-  alias ExPilot.Arenas
+  alias ExPilot.{Alias, Arenas}
 
   @close_after_ms 10_000
   @keep_done_ms 60_000
@@ -84,7 +84,7 @@ defmodule ExPilot.Duels do
          %ExPilot.Map{} = map <- Arenas.map(map_name) || {:error, :unknown_arena} do
       id = state.next
       arena = :"duel_#{id}"
-      note = "#{challenger} vs #{challenged} · first to #{first_to}"
+      note = "#{Alias.of(challenger)} vs #{Alias.of(challenged)} · first to #{first_to}"
 
       :ok =
         Arenas.register(arena, map,

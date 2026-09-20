@@ -11,6 +11,7 @@ defmodule ExPilot.Application do
       ExPilot.Ledger,
       {Cauldron2D.Beacon.Listener, game: :ex_pilot},
       ExPilot.Duels,
+      ExPilot.Roster,
       {Phoenix.PubSub, name: ExPilot.Web.PubSub}
     ]
 

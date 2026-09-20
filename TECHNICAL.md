@@ -29,6 +29,8 @@ The web client is `cauldron_2d_net` plus `ExPilot.Web`; its design is
 | `ExPilot.Ball`, `ExPilot.Targets`, `ExPilot.Race` | the team modes: the ball on its string, the targets, the checkpoints |
 | `ExPilot.Robot` | a robot's judgement, a `Cauldron2D.Robot` brain: it hunts, fires with a line of sight, refuels, and finds its way on `Cauldron2D.Grid.Coarse` |
 | `ExPilot.Ledger` | ExPilot's metrics on `Cauldron2D.Ledger`, and the boards' values as text |
+| `ExPilot.Alias` | the name an account is seen under: its alias, or an anonymous name derived from the username with the endpoint's secret |
+| `ExPilot.Roster` | who is in which arena since when, and the last joins and leaves, from `Cauldron2D.World.Presence` |
 | `ExPilot.Mode` | the kinds of arena, in words and colour |
 | `ExPilot.Radar` | the hud's minimap on `Cauldron2D.Minimap` |
 | `ExPilot.Duels`, `ExPilot.Duels.Remote` | challenges as private arenas; a challenge sent to another server |
@@ -37,7 +39,39 @@ The web client is `cauldron_2d_net` plus `ExPilot.Web`; its design is
 | `ExPilot.Sound`, `ExPilot.Music` | effects per event; the pieces in sections and layers, and the static repertoire |
 | `ExPilot.Client` | the `Cauldron2D.Client.Game`: what every client needs from the game |
 | `ExPilot.Arenas`, `ExPilot.Server` | the maps' arenas on `Cauldron2D.Arenas`, with robots and a recorder beside each world; the servers on `Cauldron2D.Drafter.Server` |
-| `ExPilot.Web` | the Phoenix endpoint and pages (login, lobby, arena, settings, guide, leaders) around `Cauldron2D.Net`'s socket, channel and API |
+| `ExPilot.Web` | the Phoenix endpoint and pages (login, lobby, arena, settings, guide, leaders, admin) around `Cauldron2D.Net`'s socket, channel and API |
+
+## Names
+
+A world knows a player by their account name — that is the id `Cauldron2D.World`
+holds, what the ledger records under `:id`, and what a duel's `only:` gate checks. What
+is shown is `ExPilot.Alias.of/1`: `ExPilot.Client.join_props/1` sends the alias as the
+player's `:username` to the world, so the ship, the hud, the boards and the arena's
+messages carry it, and `player_label/1` turns ids into aliases in every lobby and signs
+chat with them. An account with no alias is seen under `ExPilot.Alias.anonymous/1`, an
+HMAC of the username with the endpoint's `secret_key_base`, so it is stable and not to
+be worked back; an alias may not collide with another account's alias, username or
+anonymous name, in any case. `ExPilot.Alias.resolve/1` finds the account behind a name
+others see, and nothing behind a username, so a challenge can be addressed to what the
+lobby shows without exposing accounts.
+
+## Admin
+
+`admin: true` in an account's props (`mix ex_pilot.admin NAME`, `ExPilot.Web.Auth.put_admin/2`,
+or the admin page itself) opens `/admin`, gated by `ExPilot.Web.Auth.on_mount/4`'s `:admin`
+hook. The page reads `ExPilot.Roster` (every session `Cauldron2D.Sessions` lists — ssh
+clients, browser pages — with the arena each is in, and the events; the pilots panel on
+every page, `ExPilot.Web.PilotsLive`, is a nested LiveView over the same roster), `Cauldron2D.Stats` (arenas
+and the node), `Drafter.Accounts.list/1` and the ledger's `top: :all` board, and acts
+through `Cauldron2D.Player.leave/2`, `ExPilot.Arenas.stop/1`,
+`ExPilot.Ledger.forget_account/1` and `put_admin/2`. It is gated by account, not by
+address, because a request through a tunnel such as cloudflared arrives from
+`127.0.0.1` too.
+
+Behind such a tunnel, Cloudflare caches stylesheets and scripts by extension, so the
+pages link them through `ExPilot.Web.Assets.path/3`: `/expilot.css?vsn=<digest of the
+file>`, which changes with the file and which `Plug.Static` serves as cacheable for a
+year.
 
 ## Map rules
 
@@ -45,7 +79,7 @@ Map headers set the rules XPilot's do — `allowshields`, `initialfuel` and the 
 kit, `shotswallbounce`, `friction`, `allowplayercrashes`, `targetkillteam`,
 `treasurekillteam`, `dropitemonkillprob`, `laserisstungun`, `shieldeditempickup`,
 `gravityangle`, `gravitypoint`, `maxunshieldedwallbouncespeed`,
-`maxshieldedwallbouncespeed`, `wallbouncefueldrainmult`, `racemode`, `teamplay`… — the
+`maxshieldedwallbouncespeed`, `wallbouncefueldrainmult`, `timing`, `teamplay`… — the
 full list is in `ExPilot.Map`. A ship sits on its base facing away from the wall the base
 is on — up off a floor, down under a ceiling, sideways off a wall — and launches that way.
 
@@ -135,7 +169,10 @@ server as needed. They fly rounds like anyone else and land on the boards; `mix
 ex_pilot.ledger --forget "load_*"` (with the server stopped — the ledger is held by one
 process) drops their results, or any name's by pattern (`ExPilot.Ledger.forget/1` while
 it runs). The ledger is `$XDG_DATA_HOME/expilot/ledger.dets`; robots' results are not
-kept.
+kept. The file belongs to one operating system process at a time (`ledger.dets.lock`
+holds its pid): a second `mix` VM on the same machine — `ex_pilot.play`, `ex_pilot.load`,
+another `serve` — starts with an idle ledger that records nothing, `mix ex_pilot.serve`
+refuses to serve on one, and the admin page says so when a forget fails.
 
 ## Files on disk
 
@@ -144,7 +181,7 @@ kept.
 | `$XDG_CONFIG_HOME/expilot/<player>.settings`, `<player>.<kind>.settings` | a player's settings, per kind of client |
 | `$XDG_CONFIG_HOME/expilot/<player>.shipshape` | a player's own shipshape |
 | `$XDG_DATA_HOME/expilot/accounts.terms` | the server's accounts |
-| `$XDG_DATA_HOME/expilot/ledger.dets` | the boards |
+| `$XDG_DATA_HOME/expilot/ledger.dets`, `ledger.dets.lock` | the boards, and the pid of the process holding them |
 | `$XDG_DATA_HOME/expilot/load/<time>.jsonl` | load test reports |
 | `$XDG_CACHE_HOME/expilot/music` | the rendered static repertoire |
 | `priv/maps` | the arenas; `mix ex_pilot.maps` fetches the classic ones |

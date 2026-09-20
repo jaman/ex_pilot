@@ -9,8 +9,10 @@ defmodule ExPilot.Ledger do
       ExPilot.Ledger.forget("load_*")
 
   The process is named `ExPilot.Ledger` and started with the application; every arena's
-  recorder writes to it. `mix ex_pilot.ledger --forget load_*` forgets results from the
-  command line, on a ledger no server holds.
+  recorder writes to it. The file belongs to one operating system process at a time:
+  while another holds it, this one keeps nothing, `held/0` names the holder, and
+  `ExPilot.Server.start/1` refuses to serve. `mix ex_pilot.ledger --forget load_*`
+  forgets results from the command line, on a ledger no server holds.
   """
 
   alias Cauldron2D.{Ledger, Paths}
@@ -25,19 +27,17 @@ defmodule ExPilot.Ledger do
   ]
 
   @doc false
-  def child_spec(_opts) do
-    %{
-      id: __MODULE__,
-      start:
-        {Ledger, :start_link,
-         [
-           [
-             name: __MODULE__,
-             path: Application.get_env(:ex_pilot, :ledger, path()),
-             metrics: @metrics
-           ]
-         ]}
-    }
+  def child_spec(_opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, []}}
+
+  @doc "Start the ledger named `ExPilot.Ledger` on the file configured as `:ex_pilot, :ledger`, else `path/0`; idle while another process holds it."
+  @spec start_link() :: GenServer.on_start()
+  def start_link do
+    Ledger.start_link(
+      name: __MODULE__,
+      path: Application.get_env(:ex_pilot, :ledger, path()),
+      metrics: @metrics,
+      held: :idle
+    )
   end
 
   @doc "The metrics as `Cauldron2D.Ledger` is started with them."
@@ -64,12 +64,25 @@ defmodule ExPilot.Ledger do
   @spec board(Ledger.period(), Ledger.metric(), keyword()) :: [Ledger.entry()]
   def board(period, metric, opts \\ []), do: Ledger.board(__MODULE__, period, metric, opts)
 
+  @doc "The operating system process holding the ledger file, `{:held, pid}`, or nil when this one does."
+  @spec held() :: {:held, pos_integer()} | nil
+  def held do
+    case Ledger.access(__MODULE__) do
+      :read_write -> nil
+      held -> held
+    end
+  end
+
   @doc "Drop every result of a name matching `pattern` — `*` stands for any run of characters, as in `load_*` for the load tool's accounts — and say how many went."
-  @spec forget(String.t()) :: non_neg_integer()
+  @spec forget(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def forget(pattern) do
     regex = ~r/^#{pattern |> String.split("*") |> Enum.map_join(".*", &Regex.escape/1)}$/
     Ledger.forget(__MODULE__, &Regex.match?(regex, &1.name))
   end
+
+  @doc "Drop every result of the account `username`, whatever name it played under, and say how many went."
+  @spec forget_account(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def forget_account(username), do: Ledger.forget(__MODULE__, &(&1.id == username))
 
   @doc "A board value as text: seconds for contact, two decimals for a ratio, whole numbers otherwise."
   @spec value(number(), Ledger.metric()) :: String.t()

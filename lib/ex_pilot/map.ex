@@ -24,7 +24,7 @@ defmodule ExPilot.Map do
   | `*` | treasure |
   | `!` | target |
   | `b` `h` `g` `y` `t` | decoration, drawn as walls but not collided with |
-  | `A`–`Z` | race checkpoints, in order |
+  | `A`–`Z` | race checkpoints, in order, when the map has `timing`; open space otherwise |
 
   Anything else is open space.
 
@@ -34,7 +34,7 @@ defmodule ExPilot.Map do
   `gravitypoint`, `gravitypointsource`, `friction`, `shotspeed`,
   `shotlife`, `maxrobots`, `maxplayershots`, `limitedlives`, `worldlives`, `mapname`,
   `mapauthor`, `maxunshieldedwallbouncespeed` and `maxshieldedwallbouncespeed` (in
-  XPilot's units per frame), `wallbouncefueldrainmult`, `racemode`, `racelaps`, `targets`,
+  XPilot's units per frame), `wallbouncefueldrainmult`, `timing`, `racelaps`, `targets`,
   `itemprobmult`, `maxitemdensity`, every `item…prob`, `initialfuel` and every
   `initial…` item count, `allowshields`, `shotswallbounce`, `shotsgravity`,
   `allowplayerkilling` (`playerkillings`), `allowplayercrashes`, `allowplayerbounces`,
@@ -79,7 +79,7 @@ defmodule ExPilot.Map do
     maxshieldedwallbouncespeed: {:float, 50.0},
     wallbouncefueldrainmult: {:float, 1.0},
     teamimmunity: {:boolean, true},
-    racemode: {:boolean, false},
+    timing: {:boolean, false},
     racelaps: {:integer, 3},
     targets: {:boolean, true},
     itemprobmult: {:float, 1.0},
@@ -147,7 +147,7 @@ defmodule ExPilot.Map do
     shieldedmining: {:boolean, false},
     ballswallbounce: {:boolean, true},
     playerwallbouncebrakefactor: {:float, 0.5},
-    checkpointradius: {:float, 1.5},
+    checkpointradius: {:float, 6.0},
     playersonradar: {:boolean, true}
   }
 
@@ -164,9 +164,16 @@ defmodule ExPilot.Map do
   end
 
   defp build(map) do
-    tiles = TileMap.cells(map, &legend/1)
+    tiles = map |> TileMap.cells(&legend/1) |> without_checkpoints(timed?(map))
     %__MODULE__{map: map, tiles: tiles, features: features(map, tiles)}
   end
+
+  defp timed?(map), do: TileMap.option(map, "timing", :boolean, false)
+
+  defp without_checkpoints(tiles, true), do: tiles
+
+  defp without_checkpoints(tiles, false),
+    do: Map.reject(tiles, fn {_pos, tile} -> match?({:checkpoint, _}, tile) end)
 
   defp features(map, tiles) do
     ordered = Enum.sort_by(tiles, fn {{x, y}, _} -> {y, x} end)
@@ -184,10 +191,13 @@ defmodule ExPilot.Map do
       treasures: for({pos, :treasure} <- ordered, do: pos),
       targets: for({pos, :target} <- ordered, do: pos),
       checkpoints:
-        ordered
-        |> Enum.filter(&match?({_, {:checkpoint, _}}, &1))
-        |> Enum.sort_by(fn {_pos, {:checkpoint, n}} -> n end)
-        |> Enum.map(&elem(&1, 0))
+        for(
+          {pos, {:checkpoint, n}} <- ordered,
+          reduce: %{},
+          do: (acc -> Map.put(acc, n, pos))
+        )
+        |> Enum.sort()
+        |> Enum.map(&elem(&1, 1))
     }
   end
 
@@ -327,7 +337,7 @@ defmodule ExPilot.Map do
   @spec targets(t()) :: [point()]
   def targets(%__MODULE__{features: %{targets: targets}}), do: targets
 
-  @doc "Race checkpoints in order."
+  @doc "Race checkpoints in order, one per letter (the last of a repeated letter, in map order), when the map has `timing`; empty otherwise."
   @spec checkpoints(t()) :: [point()]
   def checkpoints(%__MODULE__{features: %{checkpoints: checkpoints}}), do: checkpoints
 

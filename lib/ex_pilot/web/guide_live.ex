@@ -13,7 +13,7 @@ defmodule ExPilot.Web.GuideLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <.shell username={@username} current="guide">
+    <.shell socket={@socket} username={@username} admin?={@admin?} current="guide">
       <div class="page-head">
         <h1>Guide</h1>
         <p class="dim">What you will meet in an arena, and the key that uses it.</p>

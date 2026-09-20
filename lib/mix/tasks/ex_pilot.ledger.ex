@@ -26,21 +26,25 @@ defmodule Mix.Tasks.ExPilot.Ledger do
       Keyword.get(opts, :forget) || Mix.raise("--forget PATTERN says which names to forget")
 
     Mix.Task.run("app.config")
+    path = Application.get_env(:ex_pilot, :ledger, ExPilot.Ledger.path())
 
-    case Cauldron2D.Ledger.start_link(
-           name: ExPilot.Ledger,
-           path: Application.get_env(:ex_pilot, :ledger, ExPilot.Ledger.path()),
-           metrics: ExPilot.Ledger.metrics_spec()
-         ) do
-      {:ok, _ledger} ->
-        gone = ExPilot.Ledger.forget(pattern)
-
-        Mix.shell().info(
-          "forgot #{gone} results of #{pattern}; #{Cauldron2D.Ledger.count(ExPilot.Ledger)} remain"
-        )
+    with nil <- Cauldron2D.Ledger.holder(path),
+         {:ok, _ledger} <-
+           Cauldron2D.Ledger.start_link(
+             name: ExPilot.Ledger,
+             path: path,
+             metrics: ExPilot.Ledger.metrics_spec()
+           ),
+         {:ok, gone} <- ExPilot.Ledger.forget(pattern) do
+      Mix.shell().info(
+        "forgot #{gone} results of #{pattern}; #{Cauldron2D.Ledger.count(ExPilot.Ledger)} remain"
+      )
+    else
+      pid when is_integer(pid) ->
+        Mix.raise("the ledger #{path} is held by process #{pid}; stop the server first")
 
       {:error, reason} ->
-        Mix.raise("the ledger could not be opened (is the server running?): #{inspect(reason)}")
+        Mix.raise("the ledger could not be tended: #{inspect(reason)}")
     end
   end
 end

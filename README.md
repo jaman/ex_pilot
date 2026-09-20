@@ -175,20 +175,40 @@ The display setting picks pixels where the terminal has them, braille, or glyphs
 frame rate (auto is the terminal's best: 15 on iTerm2 and sixel terminals, 30 elsewhere).
 Your own shipshape is read from `$XDG_CONFIG_HOME/expilot/<player>.shipshape`.
 
-## Settings and your name
+## Your name, and the name others see
+
+Nobody sees your account name but you and an admin. Until you choose otherwise you are
+seen under an anonymous name of your own — two words and a number, like
+`amber-falcon-27`, the same every visit — in the lobby, over your ship, in chat, in
+duels and on the boards. The web settings page shows you both, `alice, seen as
+amber-falcon-27`, and lets you choose an alias instead: one to thirty-two letters,
+digits, spaces, `_` or `-`, not one another pilot is seen as or named. The boards count
+by account, so changing it keeps your record. Every client shows you your own name with
+the one others see after it, so you always know which is which.
+
+## Settings
 
 Sound levels, the pointer and keys are kept per kind of client — the terminal, the
 desktop, a browser, a phone or tablet — in `$XDG_CONFIG_HOME/expilot/` and in your account,
-so what suits a phone does not follow you to the desktop. The web settings page also keeps
-a **nickname**, the name every client flies under and the boards show; the boards count by
-account, so changing it keeps your record.
+so what suits a phone does not follow you to the desktop.
 
 ## Serving
 
 `mix ex_pilot.serve --port 2222 --http 2280 --robots 4` runs ssh and the web in one
 process; `--music personal | arena | dynamic | static | off` and `--sfx off` set how much sound the
-server makes for each session. [TECHNICAL.md](TECHNICAL.md) has what a session costs, the
-music policies, load testing, the files on disk and how the code is put together.
+server makes for each session.
+
+`mix ex_pilot.admin alice` makes an account an admin, and `admin` joins the pages along
+the top of the browser: who is logged in, on what kind of client, under which name, in
+which arena or still in the lobby, and for how long; every arena
+running and how it is keeping up; every account with the name it is seen under and its
+record; what happened lately; and the actions — kick a session, stop an idle arena,
+forget an account's results, grant or revoke admin. Every page in the browser shows how
+many pilots are logged in; that count opens a panel with the whole list — each by the
+name they are seen under, where they are, and on what.
+
+[TECHNICAL.md](TECHNICAL.md) has what a session costs, the music policies, load testing,
+the files on disk and how the code is put together.
 
 ## License
 

@@ -59,7 +59,7 @@ defmodule ExPilot.Web.LeadersLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <.shell username={@username} current="leaders">
+    <.shell socket={@socket} username={@username} admin?={@admin?} current="leaders">
       <div class="page-head">
         <h1>Leaders</h1>
         <p class="dim">Every round counts; robots do not.</p>

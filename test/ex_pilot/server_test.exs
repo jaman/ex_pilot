@@ -46,6 +46,34 @@ defmodule ExPilot.ServerTest do
     {:ok, port: port, server: server, dir: dir}
   end
 
+  test "the server does not start while another process holds the ledger", %{dir: dir} do
+    sleeper = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["30"])
+    {:os_pid, holder} = Port.info(sleeper, :os_pid)
+    held = Path.join(dir, "held_ledger.dets")
+    File.write!(held <> ".lock", Integer.to_string(holder))
+    previous = Application.get_env(:ex_pilot, :ledger)
+    Application.put_env(:ex_pilot, :ledger, held)
+    :ok = Supervisor.terminate_child(ExPilot.Supervisor, ExPilot.Ledger)
+    {:ok, _idle} = Supervisor.restart_child(ExPilot.Supervisor, ExPilot.Ledger)
+
+    on_exit(fn ->
+      Application.put_env(:ex_pilot, :ledger, previous)
+      :ok = Supervisor.terminate_child(ExPilot.Supervisor, ExPilot.Ledger)
+      {:ok, _ledger} = Supervisor.restart_child(ExPilot.Supervisor, ExPilot.Ledger)
+      System.cmd("kill", [Integer.to_string(holder)])
+    end)
+
+    assert Cauldron2D.Ledger.access(ExPilot.Ledger) == {:held, holder}
+
+    assert {:error, {:ledger_held, ^holder}} =
+             ExPilot.Server.start(
+               port: 39_000 + :rand.uniform(900),
+               http: false,
+               accounts: Path.join(dir, "accounts2.bin"),
+               maps: [@fixture]
+             )
+  end
+
   test "the accounts live under XDG data, and a file left in the working directory by an older server is carried over" do
     dir = Path.join(System.tmp_dir!(), "ex_pilot_accounts_#{System.os_time(:nanosecond)}")
     File.mkdir_p!(Path.join(dir, "old"))

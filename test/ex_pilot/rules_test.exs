@@ -235,6 +235,33 @@ defmodule ExPilot.RulesTest do
   end
 
   describe "map options" do
+    test "timing makes a race of the checkpoints; without it the letters are open space" do
+      race = arena(timing: "yes", racelaps: 2, checkpointradius: 2)
+      assert Game.mode(race) == :race
+      assert ExPilot.Map.checkpoints(race) == [{12, 2}]
+      assert ExPilot.Map.tile(race, {12, 2}) == {:checkpoint, 0}
+      assert ExPilot.Map.option(arena([]), :checkpointradius) == 6.0
+
+      untimed = arena([])
+      assert Game.mode(untimed) == :ctf
+      assert ExPilot.Map.checkpoints(untimed) == []
+      assert ExPilot.Map.tile(untimed, {12, 2}) == nil
+
+      game =
+        game(timing: "yes", racelaps: 2, checkpointradius: 2)
+        |> joined(:a)
+        |> place(:a, {12.5, 2.5})
+        |> play(1)
+
+      assert %{checkpoint: 0, laps: 1, finished?: false} = ship(game, :a).race
+      assert Enum.any?(events(game), &match?({:checkpoint, _}, &1))
+      assert %{race: %{lap: 2, laps: 2}} = Game.view(game, :a)
+
+      done = game |> place(:a, {20.0, 8.0}) |> play(1) |> place(:a, {12.5, 2.5}) |> play(1)
+      assert ship(done, :a).race.finished?
+      assert Enum.any?(events(done), &match?({:finish, _}, &1))
+    end
+
     test "allowshields off leaves the shield key dead" do
       game =
         game(allowshields: "no")

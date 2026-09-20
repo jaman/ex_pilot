@@ -51,6 +51,13 @@ defmodule ExPilot.Server do
   @doc "Register the arenas and start serving; see the module documentation for the options."
   @spec start(keyword()) :: {:ok, t()} | {:error, term()}
   def start(opts \\ []) do
+    case ExPilot.Ledger.held() do
+      nil -> serve(opts)
+      {:held, pid} -> {:error, {:ledger_held, pid}}
+    end
+  end
+
+  defp serve(opts) do
     ExPilot.Art.install()
 
     arenas =

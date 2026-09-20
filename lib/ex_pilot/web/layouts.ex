@@ -3,6 +3,8 @@ defmodule ExPilot.Web.Layouts do
 
   use Phoenix.Component
 
+  alias ExPilot.Web.Assets
+
   def root(assigns) do
     ~H"""
     <!DOCTYPE html>
@@ -19,11 +21,11 @@ defmodule ExPilot.Web.Layouts do
         <link rel="manifest" href="/manifest.webmanifest" />
         <link rel="apple-touch-icon" href="/icon.png" />
         <title>ExPilot</title>
-        <link rel="stylesheet" href="/expilot.css" />
-        <script src="/vendor/phoenix.min.js"></script>
-        <script src="/vendor/phoenix_live_view.min.js"></script>
-        <script src="/cauldron.js"></script>
-        <script src="/expilot.js"></script>
+        <link rel="stylesheet" href={Assets.path(:ex_pilot, "expilot.css")} />
+        <script src={Assets.path(:phoenix, "phoenix.min.js", at: "/vendor")}></script>
+        <script src={Assets.path(:phoenix_live_view, "phoenix_live_view.min.js", at: "/vendor")}></script>
+        <script src={Assets.path(:cauldron_2d_net, "cauldron.js")}></script>
+        <script src={Assets.path(:ex_pilot, "expilot.js")}></script>
         <script>document.documentElement.classList.toggle("touch", ExPilot.touch());</script>
       </head>
       <body>

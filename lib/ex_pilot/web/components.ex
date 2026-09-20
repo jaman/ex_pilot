@@ -9,15 +9,20 @@ defmodule ExPilot.Web.Components do
 
   alias Cauldron2D.Net.Sheet
   alias ExPilot.Art
+  alias ExPilot.Web.PilotsLive
+  alias Phoenix.LiveView.JS
 
   @sprite_scale 3
 
+  attr(:socket, Phoenix.LiveView.Socket, required: true)
   attr(:username, :string, required: true)
   attr(:current, :string, required: true)
   attr(:wide, :boolean, default: false)
+  attr(:seen_as, :string, default: nil)
+  attr(:admin?, :boolean, default: false)
   slot(:inner_block, required: true)
 
-  @doc "The top bar — wordmark, the pages, the pilot — over a page of content."
+  @doc "The top bar — wordmark, the pages (admin among them for an admin), the pilot — over a page of content, with the pilots panel (`ExPilot.Web.PilotsLive`) rendered into the page."
   def shell(assigns) do
     ~H"""
     <header class="topbar">
@@ -27,15 +32,19 @@ defmodule ExPilot.Web.Components do
         <a href="/leaders" class={@current == "leaders" && "current"}>leaders</a>
         <a href="/guide" class={@current == "guide" && "current"}>guide</a>
         <a href="/settings" class={@current == "settings" && "current"}>settings</a>
+        <a :if={@admin?} href="/admin" class={@current == "admin" && "current"}>admin</a>
       </nav>
-      <div class="pilot"><span class="dot"></span> <b>{@username}</b> <a href="/logout" class="faint">log out</a></div>
+      <div class="pilot"><span class="dot"></span> <b>{@username}</b><span :if={@seen_as && @seen_as != @username} class="faint" title="how other pilots see you"> seen as {@seen_as}</span> <a href="/logout" class="faint">log out</a></div>
     </header>
+    {live_render(@socket, PilotsLive, id: "pilots", session: %{"username" => @username})}
     <main class={["page", @wide && "page-wide"]}>{render_slot(@inner_block)}</main>
     <nav class="tabbar">
       <a href="/lobby" class={@current == "lobby" && "current"}><span class="glyph">▲</span>arenas</a>
       <a href="/leaders" class={@current == "leaders" && "current"}><span class="glyph">★</span>leaders</a>
       <a href="/guide" class={@current == "guide" && "current"}><span class="glyph">?</span>guide</a>
       <a href="/settings" class={@current == "settings" && "current"}><span class="glyph">⚙</span>settings</a>
+      <a :if={@admin?} href="/admin" class={@current == "admin" && "current"}><span class="glyph">◈</span>admin</a>
+      <a href="#pilots" phx-click={JS.push("open", target: "#pilots")}><span class="glyph">☺</span>pilots</a>
       <a href="/logout"><span class="glyph">⏻</span>{@username}</a>
     </nav>
     """

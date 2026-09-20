@@ -5,13 +5,12 @@ defmodule ExPilot.Web.LobbyLive do
 
   import ExPilot.Web.Components
 
-  alias Cauldron2D.World.Presence
-  alias ExPilot.{Arenas, Duels}
+  alias ExPilot.{Alias, Arenas, Duels, Roster}
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      Presence.subscribe()
+      Roster.subscribe()
       Phoenix.PubSub.subscribe(ExPilot.Web.PubSub, "duels")
     end
 
@@ -21,7 +20,9 @@ defmodule ExPilot.Web.LobbyLive do
      |> load()}
   end
 
-  defp load(socket), do: assign(socket, arenas: Arenas.list(), duels: Duels.list())
+  defp load(socket) do
+    assign(socket, arenas: Arenas.list(), duels: Duels.list())
+  end
 
   @impl true
   def handle_event("challenge", %{"to" => to, "arena" => arena, "first_to" => first_to}, socket) do
@@ -48,7 +49,7 @@ defmodule ExPilot.Web.LobbyLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <.shell username={@username} current="lobby">
+    <.shell socket={@socket} username={@username} admin?={@admin?} seen_as={Alias.of(@username)} current="lobby">
       <div class="page-head">
         <h1>Arenas</h1>
         <p class="dim">{length(@arenas)} arenas · {Enum.sum(Enum.map(@arenas, & &1.players))} pilots flying · robots make room when you join a full one</p>
@@ -69,8 +70,8 @@ defmodule ExPilot.Web.LobbyLive do
         </form>
         <ul :if={@duels != []} class="duel-list">
           <li :for={duel <- @duels}>
-            <span class="mono">{duel.challenger} vs {duel.challenged}</span> · {duel.base} · first to {duel.first_to}
-            <b :if={duel.ended == :won}> — {duel.winner} won</b>
+            <span class="mono">{Alias.of(duel.challenger)} vs {Alias.of(duel.challenged)}</span> · {duel.base} · first to {duel.first_to}
+            <b :if={duel.ended == :won}> — {Alias.of(duel.winner)} won</b>
             <span :if={duel.ended in [:declined, :withdrawn, :expired]} class="dim"> — {duel.ended}</span>
             <a :if={duel.ended == nil and mine?(duel, @username)} class="btn btn-primary btn-sm" href={"/arena/#{duel.arena}"}>fly</a>
             <a :if={duel.ended == nil} class="btn btn-ghost btn-sm" href={"/arena/#{duel.arena}?spectate=1"}>watch</a>
@@ -109,7 +110,7 @@ defmodule ExPilot.Web.LobbyLive do
   defp playing(n), do: "#{n} pilots flying"
 
   @impl true
-  def handle_info({:cauldron_players, _world, _change, _id}, socket), do: {:noreply, load(socket)}
+  def handle_info({:roster, :changed}, socket), do: {:noreply, load(socket)}
   def handle_info({:duels, :changed}, socket), do: {:noreply, load(socket)}
 
   defp mine?(duel, username), do: username in [duel.challenger, duel.challenged]
@@ -129,18 +130,27 @@ defmodule ExPilot.Web.LobbyLive do
     bases =
       for %{id: id, mode: mode} <- socket.assigns.arenas, mode != :duel, do: Atom.to_string(id)
 
-    if arena in bases,
-      do:
+    cond do
+      arena not in bases ->
+        "pick an arena"
+
+      Alias.resolve(to) == nil ->
+        "no pilot is seen as #{to}"
+
+      true ->
         challenged(
-          Duels.challenge(socket.assigns.username, to, String.to_existing_atom(arena),
+          Duels.challenge(
+            socket.assigns.username,
+            Alias.resolve(to),
+            String.to_existing_atom(arena),
             first_to: kills
           )
-        ),
-      else: "pick an arena"
+        )
+    end
   end
 
   defp challenged({:ok, duel}),
-    do: "#{duel.challenged} is challenged on #{duel.base}, first to #{duel.first_to}"
+    do: "#{Alias.of(duel.challenged)} is challenged on #{duel.base}, first to #{duel.first_to}"
 
   defp challenged({:error, :yourself}), do: "not yourself"
   defp challenged({:error, reason}), do: inspect(reason)

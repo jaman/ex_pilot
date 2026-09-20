@@ -75,10 +75,10 @@ defmodule ExPilot.LedgerTest do
           kills: 1
       })
 
-    assert Ledger.forget("load_*") == 2
+    assert Ledger.forget("load_*") == {:ok, 2}
     assert [%{name: "cal"}] = Ledger.board(:all, :kills, arena: "forgettest")
-    assert Ledger.forget("load_*") == 0
-    assert Ledger.forget("cal") == 1
+    assert Ledger.forget("load_*") == {:ok, 0}
+    assert Ledger.forget("cal") == {:ok, 1}
   end
 
   test "values read as the boards show them" do

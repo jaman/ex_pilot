@@ -32,7 +32,7 @@ defmodule ExPilot.Game do
   missiles, mines and lasers are `ExPilot.Weapons`. With `teamplay`, teammates' shots
   pass through each other when the map has `teamimmunity`, team scores add up, targets
   (`ExPilot.Targets`) and balls in treasures (`ExPilot.Ball`) score for a team. With
-  `racemode`, ships pass the checkpoints in order (`ExPilot.Race`). What happens is told
+  `timing`, ships pass the checkpoints in order (`ExPilot.Race`). What happens is told
   in messages the view carries.
 
   ## Actions
@@ -159,7 +159,7 @@ defmodule ExPilot.Game do
           crash_speed: Arena.option(arena, :maxunshieldedwallbouncespeed) * 50 / 35,
           shielded_crash_speed: Arena.option(arena, :maxshieldedwallbouncespeed) * 50 / 35,
           bounce_fuel: @wall_bounce_fuel * Arena.option(arena, :wallbouncefueldrainmult),
-          race?: Arena.option(arena, :racemode),
+          race?: Arena.option(arena, :timing),
           laps: Arena.option(arena, :racelaps),
           checkpoints: Arena.checkpoints(arena),
           checkpoint_reach: Arena.option(arena, :checkpointradius) / 1,
@@ -199,7 +199,7 @@ defmodule ExPilot.Game do
 
   def mode(%Arena{} = arena) do
     cond do
-      Arena.option(arena, :racemode) -> :race
+      Arena.option(arena, :timing) -> :race
       Arena.option(arena, :teamplay) and Arena.treasures(arena) != [] -> :ctf
       Arena.option(arena, :teamplay) -> :team
       true -> :dogfight
