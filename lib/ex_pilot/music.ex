@@ -22,7 +22,7 @@ defmodule ExPilot.Music do
   The kind of arena is the view's `mode` (`ExPilot.Game.mode/1`); the arena pieces for
   each kind live in `ExPilot.Music.Ctf`, `ExPilot.Music.Team` and `ExPilot.Music.Race`,
   a duel taking the dogfight's. A stage whose music is static asks
-  `cue(view, {:static, :arena})` and gets a song written to loop, one a kind of arena,
+  `cue(view, {:static, :play})` and gets a song written to loop, one a kind of arena,
   from `ExPilot.Music.Static`; the layered pieces above are for stages that follow the
   play.
 
@@ -39,7 +39,7 @@ defmodule ExPilot.Music do
   fit; the director changes piece at the next bar.
 
       ExPilot.Music.pieces()
-      ExPilot.Music.cue(view, :arena)
+      ExPilot.Music.cue(view, :play)
       ExPilot.Music.source("burn", :combat, :drums)
   """
 
@@ -99,9 +99,9 @@ defmodule ExPilot.Music do
     end
   end
 
-  @doc "Which piece, section and layer levels a player's view calls for on `screen`; `{:static, :arena}` names the song a static stage loops for the arena's kind."
+  @doc "Which piece, section and layer levels a player's view calls for on `screen`; `{:static, :play}` names the song a static stage loops for the arena's kind."
   @spec cue(map() | nil, Cauldron2D.Client.Game.screen()) :: Cauldron2D.Audio.Music.cue()
-  def cue(view, {:static, :arena}),
+  def cue(view, {:static, :play}),
     do: %{piece: Static.piece(mode_of(view)), section: :song, layers: %{}}
 
   def cue(_view, {:static, _screen}), do: nil
@@ -125,7 +125,7 @@ defmodule ExPilot.Music do
   def cue(_view, :summary),
     do: %{piece: "ashes", section: :defeat, layers: %{drums: 0.8, bass: 1.0, pad: 1.0, lead: 0.9}}
 
-  def cue(view, :arena) do
+  def cue(view, :play) do
     case view do
       %{me: %{alive?: false, lives: 0}} ->
         %{piece: "adrift", section: :out, layers: %{drums: 0.0, bass: 0.9, pad: 1.0, lead: 0.8}}

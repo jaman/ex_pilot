@@ -30,8 +30,11 @@ defmodule ExPilot.Wx do
   back; watching, the arrows or a drag pan it, the wheel zooms about the pointer and
   `0` recentres it; `m` shows the frames and draws a second in the corner and hides them again, `Tab` the settings
   with the ship left where it is, `Esc` or `q` leaves for the lobby.
-  Settings: `↑`/`↓` choose, `←`/`→` change a level or the switch, `Enter` the
-  switch, `Esc` back where it was opened from. Summary: `Enter` again, `Esc` lobby, `q`
+  Settings: `↑`/`↓` choose, `←`/`→` change a level, the switch or the ship (a preset of
+  `ExPilot.Shipshape`, kept in the player's shipshape file for the arenas this program
+  runs; a server's arenas fly the account's), `Enter` the switch or the next ship, `Esc`
+  back where it was opened from. Summary: `Enter` again, `Esc` lobby, `q`
+
   title. Serve: `Enter` starts or stops (the first row), `↓` reaches the settings,
   typed as on connect, `Esc` title. Every item on a screen can be clicked instead.
 
@@ -48,7 +51,7 @@ defmodule ExPilot.Wx do
   alias Cauldron2D.Net.Remote
   alias Cauldron2D.World.Presence
   alias Cauldron2D.Wx.{Const, Text, View}
-  alias ExPilot.{Arenas, Server}
+  alias ExPilot.{Arenas, Server, Shipshape}
   alias ExPilot.Wx.{Keys, Screens}
 
   require Record
@@ -148,6 +151,7 @@ defmodule ExPilot.Wx do
       overrides: overrides,
       name: name,
       settings: Settings.load(ExPilot.Client, name, %{}, kind: :desktop),
+      ship: Shipshape.read_file(name),
       setting: 0,
       leaders: %{period: :day, metric: :kills, board: []},
       from: :title,
@@ -403,7 +407,7 @@ defmodule ExPilot.Wx do
 
       @enter ->
         {:noreply,
-         if(Enum.at(Screens.settings_rows(), state.setting) == :pointer,
+         if(Enum.at(Screens.settings_rows(), state.setting) in [:pointer, :ship],
            do: change(state, 1),
            else: state
          )}
@@ -598,10 +602,10 @@ defmodule ExPilot.Wx do
     end
   end
 
-  defp arenas(%{where: :url, url: url}), do: Remote.arenas(url <> "/api")
+  defp arenas(%{where: :url, url: url}), do: Remote.worlds(url <> "/api")
 
   defp arenas(%{where: :node, node: node}),
-    do: {:ok, ExPilot.Client.arenas(%{source: {:node, node}})}
+    do: {:ok, ExPilot.Client.worlds(%{source: {:node, node}})}
 
   defp arenas(%{where: :app}), do: {:ok, Arenas.list()}
 
@@ -662,14 +666,26 @@ defmodule ExPilot.Wx do
   end
 
   defp change(state, delta) do
-    settings =
-      case Enum.at(Screens.settings_rows(), state.setting) do
-        :pointer -> %{state.settings | pointer: not state.settings.pointer}
-        level -> Settings.nudge(state.settings, level, delta * @step)
-      end
+    case Enum.at(Screens.settings_rows(), state.setting) do
+      :ship -> change_ship(state, delta)
+      :pointer -> change_settings(state, %{state.settings | pointer: not state.settings.pointer})
+      level -> change_settings(state, Settings.nudge(state.settings, level, delta * @step))
+    end
+  end
 
+  defp change_settings(state, settings) do
     Settings.save(settings, ExPilot.Client, state.name, nil, kind: :desktop)
     %{state | settings: settings} |> apply_settings() |> draw()
+  end
+
+  defp change_ship(state, delta) do
+    ship = Shipshape.next_preset(state.ship, delta)
+
+    case Shipshape.keep_file(state.name, ship) do
+      :ok -> %{state | ship: ship, status: "flown from the next join, in the arenas here"}
+      {:error, reason} -> %{state | status: "could not keep the ship: #{inspect(reason)}"}
+    end
+    |> draw()
   end
 
   defp apply_settings(%{settings: settings} = state) do

@@ -5,13 +5,33 @@ defmodule ExPilot.Game do
   Ships turn, thrust, fire and shield on held actions — thrust as hard as the input's
   `strength` says, its exhaust as long; gravity from the map and its
   points pulls on them; a wall bounces a ship, at a cost in fuel, unless the ship hits it
-  unshielded faster than `@wall_crash_speed`, which is a crash; fuel
+  unshielded faster than the map's `maxunshieldedwallbouncespeed`, which is a crash; fuel
   stations refill a ship near them; wormholes move a ship elsewhere; cannons on the map
-  fire at ships in front of them; a shot kills an unshielded ship it meets unless armour
+  fire at ships in front of them, and die to any shot, missile or mine that reaches
+  them — `cannonpoints` to the shooter whose score is under `cannonmaxscore`, the
+  cannon back after `cannondeadtime` frames; a ship that touches a cannon kills it and
+  is smashed unless it has both its shield and an emergency shield up, in which case it
+  takes the points; a shot kills an unshielded ship it meets unless armour
   takes it; two ships that meet crash unless shielded, and shielded ships bounce apart.
   A ship whose tank has been empty for ten seconds, flying or sitting on its base, is
-  lost as if it had crashed. A dead ship comes back on its base a few seconds later.
+  lost as if it had crashed. A dead ship comes back on its base a few seconds later;
+  its pilot's view says what killed it in `me.epitaph` (`"shot by alice"`, `"hit a
+  wall"`, `"hit bob's mine"`, `"collided with carol"`, `"ran out of fuel"`…) from the
+  death until two seconds after the respawn, `nil` otherwise.
   Watchers join with `spectate: true` and see the arena without a ship.
+
+  ## Fuel
+
+  The numbers are XPilot's, per frame at the map's `framespersecond` (`ExPilot.Map`).
+  A ship thrusts with power 55 over its mass — the map's `shipmass` plus 0.005 a unit
+  of fuel and a fourteenth of it per armour — and no faster than 65 pixels a frame.
+  Thrust burns `power × 0.0008` a frame, a shield 0.2 a frame and a shot 0.2; a shot a
+  shield takes costs 25, a laser 100, a missile or mine 120, and meeting another shielded
+  ship 100 each; an unshielded bounce off a wall costs by speed and mass, scaled by
+  `wallbouncefueldrainmult`. A shield needs fuel, and is down while the ship holds
+  fire or its laser; nothing fires from behind an emergency shield, and firing ends the
+  immunity a ship has just after it appears. A tank holds 2600. A fuel station holds 500, gives 5 a frame to a
+  ship within reach, and refills 0.06 a frame for every ship in the arena.
 
   A player without a base to join takes a robot's: the robot's ship is removed and the
   player seated there. A player joining without a team goes to the team with fewer ships.
@@ -49,7 +69,8 @@ defmodule ExPilot.Game do
   `{:shot_wall, pos}`, `{:refuel, pos}`, `{:wormhole, pos}`, `{:cannon, pos}`,
   `{:respawn, pos}`, `{:kill, pos}`, `{:round, pos}`, `{:pick_up, pos}`, `{:missile, pos}`,
   `{:mine, pos}`, `{:laser, pos}`, `{:cloak, pos}`, `{:ecm, pos}`, `{:transporter, pos}`,
-  `{:hyperjump, pos}`, `{:target_hit, pos}`, `{:target_destroyed, pos}`, `{:goal, pos}`,
+  `{:hyperjump, pos}`, `{:target_hit, pos}`, `{:target_destroyed, pos}`,
+  `{:cannon_destroyed, pos}`, `{:cannon_back, pos}`, `{:goal, pos}`,
   `{:checkpoint, pos}`, `{:finish, pos}`.
 
   ## Rounds
@@ -90,24 +111,32 @@ defmodule ExPilot.Game do
             beams: [],
             lasered: [],
             messages: [],
+            stations: %{},
             team_bonus: %{},
             round_over_in: nil,
             won_by: nil
 
   @turn_rate 60.0
-  @thrust 14.0
-  @max_speed 18.0
-  @drag 0.05
-  @thrust_burn 25.0
-  @shield_burn 25.0
-  @shot_cost 0.5
-  @refuel_rate 1200.0
+  @power 55.0
+  @speed_limit 65.0
+  @thrust_fuel 0.0008
+  @shield_fuel 0.2
+  @shot_fuel 0.2
+  @shot_hit_fuel 25.0
+  @laser_hit_fuel 100.0
+  @missile_hit_fuel 120.0
+  @crash_fuel 100.0
+  @fuel_mass 0.005
+  @armour_mass_share 14
+  @refuel_rate 5.0
+  @station_fuel 500.0
+  @station_regeneration 0.06
   @refuel_reach 2.0
   @round_pause 4.0
-  @wall_bounce_fuel 25.0
   @messages_kept 8
   @message_life 12.0
   @respawn_after 3.0
+  @epitaph_lingers 2.0
   @spawn_immunity 3.0
   @starve_after 10.0
   @stun_time 3.0
@@ -115,7 +144,6 @@ defmodule ExPilot.Game do
   @cannon_cooldown 1.5
   @shot_radius 0.1
   @point_gravity 0.75
-  @gravity_scale 0.25
   @particle_cap 300
 
   @doc """
@@ -140,34 +168,45 @@ defmodule ExPilot.Game do
     %__MODULE__{
       arena: arena,
       particles: Particles.new(@particle_cap),
-      cannons: Enum.map(Arena.cannons(arena), &Map.put(&1, :cooldown, 0.0)),
+      cannons: Enum.map(Arena.cannons(arena), &Map.merge(&1, %{cooldown: 0.0, dead_until: nil})),
       fields: fields(arena),
+      stations: Map.new(Arena.fuel(arena), &{&1, @station_fuel}),
       rng: Rng.new(seed),
       balls: if(Arena.option(arena, :teamplay), do: Ball.new(arena), else: []),
       targets: if(Arena.option(arena, :targets), do: Targets.new(arena), else: []),
       settings:
         Map.merge(item_options(arena), %{
           wrap?: Arena.wrap?(arena),
-          shot_speed: Arena.option(arena, :shotspeed) * 50 / 35,
-          shot_life: Arena.option(arena, :shotlife) / 50,
+          shot_speed: Arena.speed(arena, Arena.option(arena, :shotspeed)),
+          shot_life: Arena.seconds(arena, Arena.option(arena, :shotlife)),
+          max_speed: Arena.speed(arena, @speed_limit),
+          ship_mass: Arena.option(arena, :shipmass) / 1,
+          thrust_burn: Arena.per_second(arena, @power * @thrust_fuel),
+          shield_burn: Arena.per_second(arena, @shield_fuel),
+          refuel_rate: Arena.per_second(arena, @refuel_rate),
+          station_regeneration: Arena.per_second(arena, @station_regeneration),
           lives: Keyword.get(opts, :lives, lives_option(arena)),
           only: Keyword.get(opts, :only),
           first_to: Keyword.get(opts, :first_to),
           teamplay?: Arena.option(arena, :teamplay),
           team_immunity?: Arena.option(arena, :teamimmunity),
           max_shots: Arena.option(arena, :maxplayershots),
-          crash_speed: Arena.option(arena, :maxunshieldedwallbouncespeed) * 50 / 35,
-          shielded_crash_speed: Arena.option(arena, :maxshieldedwallbouncespeed) * 50 / 35,
-          bounce_fuel: @wall_bounce_fuel * Arena.option(arena, :wallbouncefueldrainmult),
+          crash_speed: Arena.speed(arena, Arena.option(arena, :maxunshieldedwallbouncespeed)),
+          shielded_crash_speed:
+            Arena.speed(arena, Arena.option(arena, :maxshieldedwallbouncespeed)),
+          bounce_drain: Arena.option(arena, :wallbouncefueldrainmult) / 1,
           race?: Arena.option(arena, :timing),
           laps: Arena.option(arena, :racelaps),
           checkpoints: Arena.checkpoints(arena),
           checkpoint_reach: Arena.option(arena, :checkpointradius) / 1,
-          shields?: Arena.option(arena, :allowshields),
+          cannon_dead_time: Arena.seconds(arena, Arena.option(arena, :cannondeadtime)),
+          cannon_points: Arena.option(arena, :cannonpoints),
+          cannon_max_score: Arena.option(arena, :cannonmaxscore),
+          shields?: Arena.shields?(arena),
           kit: Items.kit(arena),
           shots_bounce?: Arena.option(arena, :shotswallbounce),
           shots_gravity?: Arena.option(arena, :shotsgravity),
-          drag: @drag + friction_drag(Arena.option(arena, :friction)),
+          drag: Arena.drag(arena, Arena.option(arena, :friction)),
           killing?:
             Arena.option(arena, :allowplayerkilling) and Arena.option(arena, :playerkillings),
           crashes?: Arena.option(arena, :allowplayercrashes),
@@ -177,8 +216,8 @@ defmodule ExPilot.Game do
           treasure_kill_team?: Arena.option(arena, :treasurekillteam),
           drop_prob: min(1.0, Arena.option(arena, :dropitemonkillprob) / 1),
           stun_laser?: Arena.option(arena, :laserisstungun),
-          mine_fuse: Arena.option(arena, :minefusetime) / 50,
-          fire_cooldown: Arena.option(arena, :firerepeatrate) / 50,
+          mine_fuse: Arena.seconds(arena, Arena.option(arena, :minefusetime)),
+          fire_cooldown: Arena.seconds(arena, Arena.option(arena, :firerepeatrate)),
           shielded_pickup?: Arena.option(arena, :shieldeditempickup),
           shielded_mining?: Arena.option(arena, :shieldedmining),
           balls_bounce?: Arena.option(arena, :ballswallbounce),
@@ -205,10 +244,6 @@ defmodule ExPilot.Game do
       true -> :dogfight
     end
   end
-
-  defp friction_drag(friction) when friction <= 0.0, do: 0.0
-  defp friction_drag(friction) when friction >= 1.0, do: 1000.0
-  defp friction_drag(friction), do: -:math.log(1.0 - friction) * 50
 
   defp item_options(arena) do
     options =
@@ -237,7 +272,7 @@ defmodule ExPilot.Game do
   end
 
   defp fields(arena) do
-    strength = -Arena.option(arena, :gravity) * @gravity_scale
+    strength = Arena.acceleration(arena, -Arena.option(arena, :gravity))
     angle = Arena.option(arena, :gravityangle) * :math.pi() / 180
 
     uniform =
@@ -469,6 +504,7 @@ defmodule ExPilot.Game do
   def step(%__MODULE__{} = game, dt) do
     %{game | beams: [], lasered: []}
     |> Map.update!(:time, &(&1 + dt))
+    |> regenerate_stations(dt)
     |> fly_ships(dt)
     |> count_contact(dt)
     |> collide_ships()
@@ -577,13 +613,31 @@ defmodule ExPilot.Game do
 
     case dying do
       [] ->
-        emit(game, {:bounce, one.body.pos})
+        game |> charge_shielded([one, other]) |> emit({:bounce, one.body.pos})
 
       lost ->
         Enum.reduce(lost, game, fn ship, acc ->
-          lose(acc, Map.fetch!(acc.ships, ship.id), "#{one.name} and #{other.name} collided")
+          struck = Enum.find([one, other], &(&1.id != ship.id))
+
+          lose(
+            acc,
+            Map.fetch!(acc.ships, ship.id),
+            "#{one.name} and #{other.name} collided",
+            "collided with #{struck.name}"
+          )
         end)
     end
+  end
+
+  defp charge_shielded(game, ships) do
+    Enum.reduce(ships, game, fn ship, acc ->
+      if Gear.shielded?(ship, acc.time),
+        do: %{
+          acc
+          | ships: Map.update!(acc.ships, ship.id, &%{&1 | fuel: max(0.0, &1.fuel - @crash_fuel)})
+        },
+        else: acc
+    end)
   end
 
   defp rebound(one, other) do
@@ -751,7 +805,7 @@ defmodule ExPilot.Game do
         |> Gear.use(dt, before)
         |> move(dt, game)
 
-      ship = Gear.wear(ship, dt, game.time)
+      ship = Gear.wear(ship, dt, game.time, game.arena)
       game = %{game | ships: Map.put(game.ships, id, ship)}
       game |> refuel(id, dt) |> warp(id) |> pick_up(id) |> race(id) |> starve(id)
     else
@@ -773,12 +827,12 @@ defmodule ExPilot.Game do
         game
 
       true ->
-        lose(game, ship, "#{ship.name} ran out of fuel")
+        lose(game, ship, "#{ship.name} ran out of fuel", "ran out of fuel")
     end
   end
 
-  defp lose(game, ship, message) do
-    {dead, game} = explode({ship, game})
+  defp lose(game, ship, message, cause) do
+    {dead, game} = explode(ship, game, cause)
     %{game | ships: Map.put(game.ships, ship.id, dead)} |> tell(message)
   end
 
@@ -793,7 +847,9 @@ defmodule ExPilot.Game do
         game
 
       {%{kind: kind}, rest} ->
-        %{game | items: rest, ships: Map.put(game.ships, id, Items.pick_up(ship, kind))}
+        {picked, rng} = Items.pick_up(ship, kind, game.rng)
+
+        %{game | items: rest, rng: rng, ships: Map.put(game.ships, id, picked)}
         |> emit({:pick_up, ship.body.pos})
     end
   end
@@ -863,7 +919,7 @@ defmodule ExPilot.Game do
       propel(%{ship | landed?: false}, dt, game)
     else
       shielding? = shielding?(ship, game)
-      burn = if shielding?, do: @shield_burn * dt, else: 0.0
+      burn = if shielding?, do: game.settings.shield_burn * dt, else: 0.0
 
       {%{
          ship
@@ -886,14 +942,14 @@ defmodule ExPilot.Game do
 
     body =
       if thrusting?,
-        do: Body.thrust(ship.body, @thrust * power * Gear.thrust_factor(ship, game.time), dt),
+        do: Body.thrust(ship.body, acceleration(ship, game) * power, dt),
         else: ship.body
 
     burn =
-      if(thrusting? and ship.timers.emergency_thrust_until <= game.time,
-        do: @thrust_burn * power,
+      if(thrusting?,
+        do: game.settings.thrust_burn * power * Gear.thrust_fuel_factor(ship, game.time),
         else: 0.0
-      ) + if shielding?, do: @shield_burn, else: 0.0
+      ) + if shielding?, do: game.settings.shield_burn, else: 0.0
 
     ship = %{
       ship
@@ -901,7 +957,7 @@ defmodule ExPilot.Game do
           body
           |> Body.gravitate(game.fields, dt)
           |> Body.drag(game.settings.drag, dt)
-          |> Body.cap_speed(@max_speed),
+          |> Body.cap_speed(game.settings.max_speed),
         fuel: max(0.0, ship.fuel - burn * dt),
         thrusting?: thrusting?,
         shielding?: shielding?,
@@ -911,8 +967,20 @@ defmodule ExPilot.Game do
     if thrusting?, do: {ship, exhaust(game, ship)}, else: {ship, game}
   end
 
-  defp shielding?(ship, game),
-    do: game.settings.shields? and Ship.holding?(ship, :shield) and ship.fuel > 0
+  defp shielding?(ship, game) do
+    game.settings.shields? and Ship.holding?(ship, :shield) and ship.fuel > 0 and
+      not Ship.holding?(ship, :fire) and not Ship.holding?(ship, :fire_laser)
+  end
+
+  defp acceleration(ship, game) do
+    Arena.acceleration(game.arena, @power / mass(ship, game)) *
+      Gear.thrust_factor(ship, game.time)
+  end
+
+  defp mass(ship, game) do
+    empty = game.settings.ship_mass
+    empty + @fuel_mass * ship.fuel + ship.armour * empty / @armour_mass_share
+  end
 
   defp exhaust(game, ship) do
     {dx, dy} = Body.direction(ship.body)
@@ -933,10 +1001,17 @@ defmodule ExPilot.Game do
     %{game | rng: rng, particles: Particles.spawn(game.particles, [spark])}
   end
 
-  defp fire({ship, game}, _dt, _unused) do
+  defp fire({ship, game}, dt, unused) do
+    if Ship.holding?(ship, :fire) and immune?(ship, game.time),
+      do: fire({Ship.timer(ship, :immune_until, 0.0), game}, dt, unused),
+      else: shoot({ship, game})
+  end
+
+  defp shoot({ship, game}) do
     if Ship.holding?(ship, :fire) and not Gear.confused?(ship, game.time) and
+         ship.timers.emergency_shield_until <= game.time and
          ship.timers.cooldown <= 0 and
-         ship.fuel >= @shot_cost and
+         ship.fuel >= @shot_fuel and
          shots_of(game, ship.id) < game.settings.max_shots do
       spread = if Items.has?(ship, :wideangle), do: [0, 3, -3], else: [0]
       directions = Enum.map(spread, &Body.direction(Body.turn(ship.body, &1)))
@@ -969,7 +1044,7 @@ defmodule ExPilot.Game do
       game =
         %{game | shots: shots ++ game.shots, next_id: next_id} |> emit({:fire, ship.body.pos})
 
-      fired = %{ship | fuel: ship.fuel - @shot_cost}
+      fired = %{ship | fuel: ship.fuel - @shot_fuel}
       {Ship.timer(fired, :cooldown, game.settings.fire_cooldown), game}
     else
       {ship, game}
@@ -992,8 +1067,14 @@ defmodule ExPilot.Game do
     end
   end
 
-  defp swept(ship, game, {:clear, at}),
-    do: {%{ship | body: wrapped(%{ship.body | pos: at}, game)}, game}
+  defp swept(ship, game, {:clear, at}) do
+    moved = %{ship | body: wrapped(%{ship.body | pos: at}, game)}
+
+    case cannon_touched(game, moved) do
+      nil -> {moved, game}
+      cannon -> rammed(moved, game, cannon)
+    end
+  end
 
   defp swept(ship, game, {:blocked, at, normal, _cell}) do
     shielded? = Gear.shielded?(ship, game.time)
@@ -1004,8 +1085,31 @@ defmodule ExPilot.Game do
       else: crash(ship, game, at)
   end
 
+  defp cannon_touched(game, ship) do
+    Enum.find(live_cannons(game), fn %{pos: {cx, cy}} ->
+      Collision.circles_overlap?(ship.body.pos, Ship.radius(), {cx + 0.5, cy + 0.5}, 0.5)
+    end)
+  end
+
+  defp rammed(ship, game, cannon) do
+    doubled? = ship.shielding? and ship.timers.emergency_shield_until > game.time
+
+    cond do
+      doubled? ->
+        game = cannon_dies(game, cannon, ship.id)
+        {%{ship | tally: Map.fetch!(game.ships, ship.id).tally}, game}
+
+      immune?(ship, game.time) ->
+        {ship, cannon_dies(game, cannon, nil)}
+
+      true ->
+        {dead, game} = explode(ship, cannon_dies(game, cannon, nil), "smashed against a cannon")
+        {dead, tell(game, "#{ship.name} smashed against a cannon")}
+    end
+  end
+
   defp crash(ship, game, at) do
-    {dead, game} = explode({%{ship | body: %{ship.body | pos: at}}, game})
+    {dead, game} = explode(%{ship | body: %{ship.body | pos: at}}, game, "hit a wall")
     {dead, tell(game, "#{ship.name} hit a wall")}
   end
 
@@ -1016,8 +1120,15 @@ defmodule ExPilot.Game do
         vel: Collision.bounce(ship.body.vel, normal, game.settings.bounce_keep)
     }
 
-    fuel = if shielded?, do: ship.fuel, else: max(0.0, ship.fuel - game.settings.bounce_fuel)
+    fuel = if shielded?, do: ship.fuel, else: max(0.0, ship.fuel - bounce_cost(ship, game))
     {%{ship | body: wrapped(body, game), fuel: fuel}, emit(game, {:bounce, at})}
+  end
+
+  defp bounce_cost(ship, game) do
+    speed = Arena.pixels_per_frame(game.arena, Body.speed(ship.body))
+    braking = 1.0 - 0.5 * game.settings.bounce_keep
+    heft = max(0.0, mass(ship, game) - 0.75 * game.settings.ship_mass)
+    0.9 * braking * heft * speed / 4 * game.settings.bounce_drain
   end
 
   defp wrapped(body, %{settings: %{wrap?: true}, arena: arena}),
@@ -1025,7 +1136,7 @@ defmodule ExPilot.Game do
 
   defp wrapped(body, _game), do: body
 
-  defp explode({ship, game}) do
+  defp explode(ship, game, cause) do
     pos = ship.body.pos
     {debris, rng} = debris(game.rng, pos, 24)
     {items, rng} = Items.drop(game.items, ship, game.settings.drop_prob, rng)
@@ -1034,7 +1145,7 @@ defmodule ExPilot.Game do
       %{game | rng: rng, items: items, particles: Particles.spawn(game.particles, debris)}
       |> emit({:explosion, pos})
 
-    {%{Ship.die(ship, @respawn_after) | ball: nil}, game}
+    {%{Ship.die(ship, @respawn_after, of: cause, at: game.time) | ball: nil}, game}
   end
 
   defp debris(rng, {x, y}, count) do
@@ -1056,17 +1167,36 @@ defmodule ExPilot.Game do
   defp refuel(game, id, dt) do
     ship = Map.fetch!(game.ships, id)
 
-    near? =
-      Enum.any?(Arena.fuel(game.arena), fn {fx, fy} ->
-        Collision.circles_overlap?(ship.body.pos, @refuel_reach, {fx + 0.5, fy + 0.5}, 0.0)
+    station =
+      Enum.find(game.stations, fn {{fx, fy}, fuel} ->
+        fuel > 0 and
+          Collision.circles_overlap?(ship.body.pos, @refuel_reach, {fx + 0.5, fy + 0.5}, 0.0)
       end)
 
-    if near? and ship.fuel < ship.max_fuel do
-      filled = min(ship.max_fuel, ship.fuel + @refuel_rate * dt)
-      %{game | ships: Map.put(game.ships, id, %{ship | fuel: filled})} |> emit_refuel(ship)
-    else
-      game
+    case station do
+      {pos, fuel} when ship.fuel < ship.max_fuel ->
+        given = Enum.min([game.settings.refuel_rate * dt, fuel, ship.max_fuel - ship.fuel])
+
+        %{
+          game
+          | ships: Map.put(game.ships, id, %{ship | fuel: ship.fuel + given}),
+            stations: Map.put(game.stations, pos, fuel - given)
+        }
+        |> emit_refuel(ship)
+
+      _none ->
+        game
     end
+  end
+
+  defp regenerate_stations(game, dt) do
+    gain = game.settings.station_regeneration * map_size(game.ships) * dt
+
+    %{
+      game
+      | stations:
+          Map.new(game.stations, fn {pos, fuel} -> {pos, min(@station_fuel, fuel + gain)} end)
+    }
   end
 
   defp emit_refuel(game, ship) do
@@ -1209,10 +1339,71 @@ defmodule ExPilot.Game do
   defp shot_swept(game, shot, to, {:clear, at}, buckets, kept) do
     moved = %{shot | body: wrapped(%{to | pos: at}, game)}
 
-    case target_hit(game, shot, moved.body.pos) do
+    with :miss <- target_hit(game, shot, moved.body.pos),
+         :miss <- cannon_hit(game, shot, moved.body.pos) do
+      shot_among_ships(game, moved, buckets, kept)
+    else
       {:hit, game} -> {game, kept}
-      :miss -> shot_among_ships(game, moved, buckets, kept)
     end
+  end
+
+  defp cannon_hit(%{cannons: []}, _shot, _pos), do: :miss
+  defp cannon_hit(_game, %{owner: {:cannon, _}}, _pos), do: :miss
+
+  defp cannon_hit(game, shot, pos) do
+    cell = Collision.cell_of(pos)
+
+    case Enum.find(live_cannons(game), &(&1.pos == cell)) do
+      nil -> :miss
+      cannon -> {:hit, cannon_dies(game, cannon, shot.owner)}
+    end
+  end
+
+  defp live_cannons(game), do: Enum.filter(game.cannons, &(&1.dead_until == nil))
+
+  defp cannon_dies(game, %{pos: {cx, cy} = pos} = cannon, killer) do
+    centre = {cx + 0.5, cy + 0.5}
+    {debris, rng} = debris(game.rng, centre, 30)
+    dead = %{cannon | dead_until: game.time + game.settings.cannon_dead_time}
+
+    %{
+      game
+      | rng: rng,
+        particles: Particles.spawn(game.particles, debris),
+        cannons: Enum.map(game.cannons, &if(&1.pos == pos, do: dead, else: &1))
+    }
+    |> emit({:cannon_destroyed, centre})
+    |> cannon_credited(killer)
+  end
+
+  defp cannon_credited(game, killer) do
+    case Map.get(game.ships, killer) do
+      %{tally: %{score: score}, team: team} when score <= game.settings.cannon_max_score ->
+        game
+        |> award(killer, team, game.settings.cannon_points)
+        |> tell("#{name_of_ship(game, killer)} destroyed a cannon")
+
+      _nobody ->
+        game
+    end
+  end
+
+  defp revive_cannons(game) do
+    Enum.reduce(game.cannons, game, fn
+      %{dead_until: until, pos: {cx, cy}} = cannon, acc when until != nil and until <= acc.time ->
+        %{
+          acc
+          | cannons:
+              Enum.map(
+                acc.cannons,
+                &if(&1.pos == cannon.pos, do: %{&1 | dead_until: nil}, else: &1)
+              )
+        }
+        |> emit({:cannon_back, {cx + 0.5, cy + 0.5}})
+
+      _cannon, acc ->
+        acc
+    end)
   end
 
   defp shot_among_ships(game, shot, buckets, kept) do
@@ -1284,7 +1475,12 @@ defmodule ExPilot.Game do
     |> Map.values()
     |> Enum.filter(&(&1.alive? and &1.team == team))
     |> Enum.reduce(tell(game, message), fn ship, acc ->
-      lose(acc, Map.fetch!(acc.ships, ship.id), "#{ship.name} went down with the team")
+      lose(
+        acc,
+        Map.fetch!(acc.ships, ship.id),
+        "#{ship.name} went down with the team",
+        "went down with the team"
+      )
     end)
   end
 
@@ -1314,16 +1510,26 @@ defmodule ExPilot.Game do
 
     cond do
       untouchable?(victim, game) -> game
+      Gear.shielded?(victim, game.time) -> shield_struck(game, victim, pos, kind)
       deflects?(victim, game, owner) -> emit(game, {:bounce, pos})
       victim.armour > 0 -> armour_struck(game, victim, pos)
       true -> killed(game, owner, victim, pos, kind)
     end
   end
 
+  defp shield_struck(game, victim, pos, kind) do
+    drained = %{victim | fuel: max(0.0, victim.fuel - hit_cost(kind))}
+    %{game | ships: Map.put(game.ships, victim.id, drained)} |> emit({:bounce, pos})
+  end
+
+  defp hit_cost(:shot), do: @shot_hit_fuel
+  defp hit_cost(:laser), do: @laser_hit_fuel
+  defp hit_cost(_missile_or_mine), do: @missile_hit_fuel
+
   defp untouchable?(victim, game), do: not victim.alive? or Gear.phasing?(victim, game.time)
 
   defp deflects?(victim, game, owner) do
-    Gear.shielded?(victim, game.time) or victim.deflecting? or immune?(victim, game.time) or
+    victim.deflecting? or immune?(victim, game.time) or
       (not game.settings.killing? and not match?({:cannon, _}, owner))
   end
 
@@ -1333,21 +1539,21 @@ defmodule ExPilot.Game do
   end
 
   defp killed(game, owner, victim, pos, kind) do
-    {dead, game} = explode({victim, game})
-    game = %{game | ships: Map.put(game.ships, victim.id, dead)} |> emit({:kill, pos})
-    game |> credit(owner) |> tell(kill_message(game, owner, victim, kind))
-  end
-
-  defp kill_message(game, owner, victim, kind) do
     killer = name_of_ship(game, owner)
-
-    case kind do
-      :shot -> "#{killer} shot #{victim.name}"
-      :mine -> "#{victim.name} hit #{killer}'s mine"
-      :laser -> "#{killer} lasered #{victim.name}"
-      _missile -> "#{killer}'s missile hit #{victim.name}"
-    end
+    {dead, game} = explode(victim, game, epitaph(kind, killer))
+    game = %{game | ships: Map.put(game.ships, victim.id, dead)} |> emit({:kill, pos})
+    game |> credit(owner) |> tell(kill_message(kind, killer, victim))
   end
+
+  defp kill_message(:shot, killer, victim), do: "#{killer} shot #{victim.name}"
+  defp kill_message(:mine, killer, victim), do: "#{victim.name} hit #{killer}'s mine"
+  defp kill_message(:laser, killer, victim), do: "#{killer} lasered #{victim.name}"
+  defp kill_message(_missile, killer, victim), do: "#{killer}'s missile hit #{victim.name}"
+
+  defp epitaph(:shot, killer), do: "shot by #{killer}"
+  defp epitaph(:mine, killer), do: "hit #{killer}'s mine"
+  defp epitaph(:laser, killer), do: "lasered by #{killer}"
+  defp epitaph(_missile, killer), do: "hit by #{killer}'s missile"
 
   defp credit(game, {:cannon, _}), do: game
 
@@ -1359,17 +1565,23 @@ defmodule ExPilot.Game do
   end
 
   defp fire_cannons(game, dt) do
+    game = revive_cannons(game)
+
     {cannons, game} =
-      Enum.map_reduce(game.cannons, game, fn cannon, acc ->
-        cooled = %{cannon | cooldown: max(0.0, cannon.cooldown - dt)}
+      Enum.map_reduce(game.cannons, game, fn
+        %{dead_until: until} = cannon, acc when until != nil ->
+          {cannon, acc}
 
-        case {cooled.cooldown, target_for(acc, cooled)} do
-          {cd, target} when cd <= 0 and target != nil ->
-            {%{cooled | cooldown: @cannon_cooldown}, cannon_fire(acc, cooled, target)}
+        cannon, acc ->
+          cooled = %{cannon | cooldown: max(0.0, cannon.cooldown - dt)}
 
-          _ ->
-            {cooled, acc}
-        end
+          case {cooled.cooldown, target_for(acc, cooled)} do
+            {cd, target} when cd <= 0 and target != nil ->
+              {%{cooled | cooldown: @cannon_cooldown}, cannon_fire(acc, cooled, target)}
+
+            _ ->
+              {cooled, acc}
+          end
       end)
 
     %{game | cannons: cannons}
@@ -1424,11 +1636,17 @@ defmodule ExPilot.Game do
     watching = watched_by(game, id, me)
 
     %{
-      me: me && summary_of(me),
+      me: me && summary_of(me, game.time),
       focus: focus_of(game, id, me, watching),
       watching: watching && watching.name,
       radar: %{players?: game.settings.players_on_radar?},
-      rules: %{shields?: game.settings.shields?, crash_speed: game.settings.crash_speed},
+      rules: %{
+        shields?: game.settings.shields?,
+        crash_speed: game.settings.crash_speed,
+        shot_speed: game.settings.shot_speed,
+        shot_range: game.settings.shot_speed * game.settings.shot_life,
+        unit_speed: Arena.speed(game.arena, 1.0)
+      },
       mode: game.settings.mode,
       others_out?: others_out?(game, id, me),
       round_over?: game.round_over_in != nil,
@@ -1443,6 +1661,8 @@ defmodule ExPilot.Game do
       balls: Enum.map(game.balls, &ball_view(game, &1)),
       beams: game.beams,
       targets_gone: Targets.gone(game.targets),
+      cannons_gone: for(%{dead_until: until, pos: pos} <- game.cannons, until != nil, do: pos),
+      stations: game.stations,
       particles: Particles.movers(game.particles, {-0.5, -0.5}),
       bounds: Arena.size(game.arena),
       wrap?: game.settings.wrap?,
@@ -1551,8 +1771,8 @@ defmodule ExPilot.Game do
   `nil` while it goes on: the player flies, or is out of lives but others still fly and
   the view follows the nearest. Once every other ship is out, or the round has ended
   with one ship standing, `%{title: title, lines: lines, next: next}` with the standings
-  as lines: `"Victory"` with `next: :next_arena` while the player still flies, `"Defeat"`
-  with `next: :same_arena` when they are out. A watcher's view, or one with unlimited
+  as lines: `"Victory"` with `next: :next_world` while the player still flies, `"Defeat"`
+  with `next: :same_world` when they are out. A watcher's view, or one with unlimited
   lives, is never over.
   """
   @spec outcome(map()) :: nil | %{title: String.t(), lines: [String.t()]}
@@ -1579,11 +1799,11 @@ defmodule ExPilot.Game do
       end)
 
     if me.alive? or me.lives > 0,
-      do: %{title: "Victory", lines: lines, next: :next_arena},
-      else: %{title: "Defeat", lines: lines, next: :same_arena}
+      do: %{title: "Victory", lines: lines, next: :next_world},
+      else: %{title: "Defeat", lines: lines, next: :same_world}
   end
 
-  defp summary_of(ship) do
+  defp summary_of(ship, time) do
     ship
     |> Ship.summary()
     |> Map.merge(%{
@@ -1595,9 +1815,16 @@ defmodule ExPilot.Game do
       deaths: ship.tally.deaths,
       items: ship.items,
       armour: ship.armour,
-      missile: ship.missile
+      missile: ship.missile,
+      epitaph: epitaph_of(ship, time)
     })
   end
+
+  defp epitaph_of(%{died_of: cause, died_at: at}, time)
+       when is_binary(cause) and is_number(at) and time - at < @respawn_after + @epitaph_lingers,
+       do: cause
+
+  defp epitaph_of(_ship, _time), do: nil
 
   defp scores(game) do
     game.ships

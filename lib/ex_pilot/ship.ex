@@ -38,7 +38,9 @@ defmodule ExPilot.Ship do
           ball: term(),
           shape: String.t() | nil,
           held_before: MapSet.t(atom()),
-          watching: term() | nil
+          watching: term() | nil,
+          died_of: String.t() | nil,
+          died_at: float() | nil
         }
 
   @typedoc """
@@ -87,12 +89,16 @@ defmodule ExPilot.Ship do
     empty_since: nil
   }
 
+  @headings 64
+  @radius 0.45
+  @max_fuel 2600.0
+
   defstruct id: nil,
             name: "",
             team: nil,
             robot?: false,
             body: %Body{},
-            fuel: 1000.0,
+            fuel: @max_fuel,
             alive?: true,
             base: {0, 0},
             launch_heading: 16,
@@ -116,7 +122,7 @@ defmodule ExPilot.Ship do
             lives: :unlimited,
             landed?: true,
             items: %{},
-            max_fuel: 1000.0,
+            max_fuel: @max_fuel,
             armour: 0,
             cloaked?: false,
             deflecting?: false,
@@ -125,11 +131,9 @@ defmodule ExPilot.Ship do
             ball: nil,
             shape: nil,
             held_before: MapSet.new(),
-            watching: nil
-
-  @headings 64
-  @radius 0.45
-  @max_fuel 1000.0
+            watching: nil,
+            died_of: nil,
+            died_at: nil
 
   @doc "The number of headings a ship turns through."
   @spec headings() :: pos_integer()
@@ -213,7 +217,7 @@ defmodule ExPilot.Ship do
         Enum.reduce(1..count//1, acc, fn _, s -> ExPilot.Items.pick_up(s, kind) end)
       end)
 
-    %{kitted | fuel: fuel, max_fuel: max(kitted.max_fuel, fuel)}
+    %{kitted | fuel: min(fuel, kitted.max_fuel)}
   end
 
   @doc "Give the ship its lives back for a new round, keeping its score; the round's streak and contact start over."
@@ -262,9 +266,13 @@ defmodule ExPilot.Ship do
     {row, %{ship | tally: %{tally | recorded: recorded}}}
   end
 
-  @doc "Mark the ship dead, counting the death and starting the respawn clock."
-  @spec die(t(), float()) :: t()
-  def die(%__MODULE__{} = ship, respawn_after) do
+  @doc """
+  Mark the ship dead, counting the death and starting the respawn clock. `of:` says what
+  killed it, as the pilot reads it (`"shot by alice"`, `"hit a wall"`), and `at:` the
+  game time of the death; both stay as `died_of` and `died_at` through the respawn.
+  """
+  @spec die(t(), float(), of: String.t(), at: float()) :: t()
+  def die(%__MODULE__{} = ship, respawn_after, death \\ []) do
     tally = %{
       ship.tally
       | deaths: ship.tally.deaths + 1,
@@ -280,7 +288,9 @@ defmodule ExPilot.Ship do
         tally: tally,
         thrusting?: false,
         shielding?: false,
-        lives: spend_life(ship.lives)
+        lives: spend_life(ship.lives),
+        died_of: Keyword.get(death, :of),
+        died_at: Keyword.get(death, :at)
     }
   end
 

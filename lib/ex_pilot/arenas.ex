@@ -1,6 +1,6 @@
 defmodule ExPilot.Arenas do
   @moduledoc """
-  ExPilot's arenas on `Cauldron2D.Arenas`: a map each, its world an `ExPilot.Game`,
+  ExPilot's arenas on `Cauldron2D.Worlds`: a map each, its world an `ExPilot.Game`,
   its robots (`ExPilot.Robot`) and its ledger recorder seated beside it.
 
       :ok = ExPilot.Arenas.register(:dogfight, "priv/maps/dogfight.map.gz")
@@ -10,10 +10,10 @@ defmodule ExPilot.Arenas do
   The map of a registered arena is kept under its name for the clients to draw from;
   `map/1` reads it, `adopt/2` keeps a map that came from another node. Everything else
   — starting on the first join, stopping when idle, `humans/1`, `running/1` — is
-  `Cauldron2D.Arenas`'s.
+  `Cauldron2D.Worlds`'s.
   """
 
-  alias Cauldron2D.Arenas
+  alias Cauldron2D.Worlds
   alias ExPilot.{Map, Mode, Robot}
 
   @type id :: atom()
@@ -39,7 +39,7 @@ defmodule ExPilot.Arenas do
       robots = Keyword.get(opts, :robots, Map.option(arena, :maxrobots))
       bases = length(Map.bases(arena))
 
-      Arenas.register(id,
+      Worlds.register(id,
         game: ExPilot.Game,
         game_opts: [arena: arena] ++ Keyword.take(opts, [:seed, :lives, :only, :first_to]),
         hz: Keyword.get(opts, :hz, 50),
@@ -88,7 +88,7 @@ defmodule ExPilot.Arenas do
   @doc "Register arena `id` and start its world and robots at once."
   @spec open(id(), Path.t() | Map.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def open(id, path_or_map, opts \\ []) do
-    with :ok <- register(id, path_or_map, opts), do: Arenas.start(id)
+    with :ok <- register(id, path_or_map, opts), do: Worlds.start(id)
   end
 
   defp load(%Map{} = arena), do: {:ok, arena}
@@ -96,7 +96,7 @@ defmodule ExPilot.Arenas do
 
   @doc "The name of arena `id`'s world; using it starts the world when it is not running."
   @spec world_name(id()) :: GenServer.name()
-  def world_name(id), do: Arenas.world_name(id)
+  def world_name(id), do: Worlds.world_name(id)
 
   @doc "Keep `arena` as the map called `name`, for a client on another node whose worlds run there; `map/1` finds it."
   @spec adopt(String.t(), Map.t()) :: :ok
@@ -107,14 +107,14 @@ defmodule ExPilot.Arenas do
   def map(name), do: :persistent_term.get({__MODULE__, :map, name}, nil)
 
   @doc "Every registered arena, as the lobby lists them, with the humans in each and its `mode` beside the kind."
-  @spec list() :: [Cauldron2D.Client.Game.arena()]
+  @spec list() :: [Cauldron2D.Client.Game.world()]
   def list,
-    do: for(arena <- Arenas.list(), do: Elixir.Map.put(arena, :mode, Mode.of_kind(arena.kind)))
+    do: for(arena <- Worlds.list(), do: Elixir.Map.put(arena, :mode, Mode.of_kind(arena.kind)))
 
   @doc "The map name and tick rate arena `id` was registered with, for an arena cut from the same map; `nil` for an unknown id."
   @spec registration(id()) :: %{map: String.t(), hz: pos_integer()} | nil
   def registration(id) do
-    case Arenas.Table.get(id) do
+    case Worlds.Table.get(id) do
       %{opts: opts} -> %{map: Keyword.fetch!(opts, :map), hz: Keyword.fetch!(opts, :hz)}
       nil -> nil
     end
@@ -122,19 +122,19 @@ defmodule ExPilot.Arenas do
 
   @doc "The players in arena `id` who are not robots; `[]` while it is not running."
   @spec humans(id()) :: [term()]
-  def humans(id), do: Arenas.humans(id)
+  def humans(id), do: Worlds.humans(id)
 
   @doc "Whether arena `id`'s world is running."
   @spec running?(id()) :: boolean()
-  def running?(id), do: Arenas.running?(id)
+  def running?(id), do: Worlds.running?(id)
 
   @doc "Stop arena `id`'s world and robots, keeping it registered; `close/1` removes it."
   @spec stop(id()) :: :ok
-  def stop(id), do: Arenas.stop(id)
+  def stop(id), do: Worlds.stop(id)
 
   @doc "Stop arena `id` and remove it from the list."
   @spec close(id()) :: :ok
-  def close(id), do: Arenas.close(id)
+  def close(id), do: Worlds.close(id)
 
   defp note(arena) do
     {width, height} = Map.size(arena)

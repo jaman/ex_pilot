@@ -54,6 +54,42 @@ defmodule ExPilot.MapTest do
     assert Arena.option(arena, :edgewrap) == false
     assert Arena.option(arena, :shotspeed) == 21.0
     assert Arena.option(arena, :teamplay) == false
+    assert Arena.option(arena, :framespersecond) == 12
+    assert Arena.option(arena, :shotlife) == 60
+    assert Arena.option(arena, :maxplayershots) == 256
+    assert Arena.option(arena, :maxunshieldedwallbouncespeed) == 20.0
+    assert Arena.option(arena, :maxshieldedwallbouncespeed) == 50.0
+    assert Arena.option(arena, :playerwallbouncebrakefactor) == 0.89
+    assert Arena.option(arena, :firerepeatrate) == 2.0
+    assert Arena.option(arena, :dropitemonkillprob) == 0.5
+    assert Arena.option(arena, :shipmass) == 20.0
+  end
+
+  test "XPilot's per-frame values read as tiles and seconds at the map's frame rate" do
+    {:ok, twelve} = Arena.parse(@small)
+
+    {:ok, twenty_four} =
+      Arena.parse(String.replace(@small, "gravity: -1.5", "framespersecond: 24"))
+
+    assert_in_delta Arena.speed(twelve, 21.0), 7.2, 0.001
+    assert_in_delta Arena.speed(twenty_four, 21.0), 14.4, 0.001
+    assert_in_delta Arena.acceleration(twelve, -0.14), -0.576, 0.001
+    assert_in_delta Arena.acceleration(twenty_four, -0.14), -2.304, 0.001
+    assert_in_delta Arena.seconds(twelve, 60), 5.0, 0.001
+    assert_in_delta Arena.seconds(twenty_four, 60), 2.5, 0.001
+    assert_in_delta Arena.per_second(twelve, 0.2), 2.4, 0.001
+    assert_in_delta Arena.drag(twelve, 0.03), 0.3655, 0.001
+    assert Arena.drag(twelve, 0.0) == 0.0
+    assert_in_delta Arena.pixels_per_frame(twelve, 7.2), 21.0, 0.001
+  end
+
+  test "shields are allowed unless allowshields or its old name playershielding says no" do
+    {:ok, plain} = Arena.parse(@small)
+    {:ok, old} = Arena.parse(String.replace(@small, "gravity: -1.5", "playershielding: no"))
+    {:ok, new} = Arena.parse(String.replace(@small, "gravity: -1.5", "allowshields: no"))
+    assert Arena.shields?(plain)
+    refute Arena.shields?(old)
+    refute Arena.shields?(new)
   end
 
   test "the classic corpus loads", _ do

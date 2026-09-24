@@ -5,7 +5,7 @@ defmodule ExPilot.Art do
       ExPilot.Art.install()
       ExPilot.Art.ship(nil, heading)      # => {:ship, 0, 17}
 
-  Tiles are 16 pixels. Walls, half walls, fuel stations, bases, cannons, wormholes,
+  Tiles are 16 pixels. Walls, half walls, fuel stations (full, low and empty), bases, cannons (and their rubble), wormholes,
   gravity points, treasures and targets are drawn from pictures; ships are the classic
   outline at 64 headings in each team's colour; shots, sparks and debris are dots.
   """
@@ -18,7 +18,7 @@ defmodule ExPilot.Art do
   @teams [nil, 1, 2, 3, 4]
 
   @team_colours %{
-    nil => "#e8e8e8",
+    0 => "#e8e8e8",
     1 => "#ff5c5c",
     2 => "#5c9cff",
     3 => "#5cff8a",
@@ -68,7 +68,7 @@ defmodule ExPilot.Art do
     atlas = Atlas.fetch(name())
 
     unless Map.has_key?(atlas.entries, {:ship, key, 0}) do
-      colour = Map.fetch!(@team_colours, team_index(team))
+      colour = team_colour(team)
 
       rasters =
         Linocut.Cache.fetch("ex_pilot/shape-#{hash}-#{team_index(team)}", fingerprint(), fn ->
@@ -96,6 +96,8 @@ defmodule ExPilot.Art do
   defp team_index(nil), do: 0
   defp team_index(team), do: rem(team - 1, 4) + 1
 
+  defp team_colour(team), do: Map.fetch!(@team_colours, team_index(team))
+
   @doc "The atlas as a value, without installing it."
   @spec build() :: Atlas.t()
   def build do
@@ -113,6 +115,14 @@ defmodule ExPilot.Art do
       |> Atlas.put(:fuel, Linocut.sprite(fuel(), fuel_palette()),
         glyph: "▓▓",
         color: {80, 220, 100}
+      )
+      |> Atlas.put(:fuel_low, Linocut.sprite(fuel(), F: "#3cc864", h: "#3a6a44"),
+        glyph: "▒▒",
+        color: {60, 160, 80}
+      )
+      |> Atlas.put(:fuel_empty, Linocut.sprite(fuel(), F: "#2a5a38", h: "#1c2a20"),
+        glyph: "░░",
+        color: {42, 90, 56}
       )
       |> Atlas.put(:base_up, Linocut.sprite(base(), base_palette()),
         glyph: "▁▁",
@@ -181,6 +191,10 @@ defmodule ExPilot.Art do
       |> Atlas.put(:shield, Linocut.outline(ring(), size: {@tile, @tile}, stroke: "#70e0ff"),
         glyph: "()",
         color: {112, 224, 255}
+      )
+      |> Atlas.put(:cannon_gone, Linocut.sprite(rubble(), r: "#5a3a3a", "#": "#4a4f5e"),
+        glyph: "░░",
+        color: {74, 79, 94}
       )
       |> Atlas.put(:target_gone, Linocut.sprite(target(), r: "#5a3030"),
         glyph: "⊗ ",
@@ -329,7 +343,8 @@ defmodule ExPilot.Art do
   end
 
   defp put_ship_headings(atlas, team) do
-    colour = Map.fetch!(@team_colours, team)
+    colour = team_colour(team)
+
     outline = Shipshape.default().outline
 
     rasters =
@@ -482,6 +497,27 @@ defmodule ExPilot.Art do
   end
 
   defp cannon_palette, do: [c: "#ff7070", C: "#c85a5a", "#": "#7a8296"]
+
+  defp rubble do
+    """
+    ................
+    ................
+    ................
+    ................
+    ......r.........
+    ..........r.....
+    ....r....rr.....
+    ...rr..r........
+    ........r...r...
+    ..r..rr.....rr..
+    .rr.........r...
+    ####..##.#####..
+    ################
+    ################
+    ################
+    ################
+    """
+  end
 
   defp wormhole do
     """

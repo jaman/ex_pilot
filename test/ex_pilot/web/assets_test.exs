@@ -10,6 +10,8 @@ defmodule ExPilot.Web.AssetsTest do
     assert Assets.path(:phoenix, "phoenix.min.js", at: "/vendor") =~
              ~r"\A/vendor/phoenix\.min\.js\?vsn=[0-9a-f]{8}\z"
 
+    assert Assets.sheet_path() =~ ~r"\A/atlas\.png\?vsn=[0-9a-f]{1,8}\z"
+
     dir = Path.join(System.tmp_dir!(), "ex_pilot_assets_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)

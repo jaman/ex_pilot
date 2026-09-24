@@ -4,9 +4,11 @@ defmodule ExPilot.Client do
   as `Cauldron2D.Client.Game` asks for it: the title, the keys, the arenas, how a view
   is drawn, and the sound and music.
 
-  A player's own shipshape, in XPilot's notation, is read from
-  `$XDG_CONFIG_HOME/expilot/<player>.shipshape` when they join an arena; every ship is
-  drawn with its own shape, the default where a player has none.
+  A player's own shipshape, in XPilot's notation, is the one their account keeps
+  (`ExPilot.Web.Auth.shipshape/1`, set on the web settings page) or, without one, the
+  file `$XDG_CONFIG_HOME/expilot/<player>.shipshape` where the world runs, read when
+  they join an arena; every ship is drawn with its own shape, the classic where a player
+  has none.
 
       Drafter.run(Cauldron2D.Drafter.Client, props: %{game: ExPilot.Client})
 
@@ -22,8 +24,11 @@ defmodule ExPilot.Client do
 
   alias Cauldron2D.Net.Link
   alias Cauldron2D.Net.Remote
-  alias ExPilot.{Alias, Arenas, Art, Game, Gear, Guide, Map, Mode, Music, Radar, Sound}
+  alias ExPilot.{Alias, Arenas, Art, Game, Gear, Guide, Map, Mode, Music, Padmap, Radar}
+  alias ExPilot.{Shipshape, Sound}
+
   alias ExPilot.Client.{LeadersPage, SoundPage}
+  alias ExPilot.Web.Auth
 
   @colours %{
     cyan: {80, 220, 240},
@@ -71,9 +76,9 @@ defmodule ExPilot.Client do
         Elixir.Map.merge(@item_keys, %{
           turn_left: [:a],
           turn_right: [:d],
-          thrust: [:s, {:mouse, :right}],
+          thrust: [:w, {:mouse, :right}],
           fire: [:" ", :f, {:mouse, :left}],
-          shield: [:left_shift, :w]
+          shield: [:left_shift, :s]
         }),
       arrows:
         Elixir.Map.merge(@item_keys, %{
@@ -97,6 +102,16 @@ defmodule ExPilot.Client do
   @impl true
   def toggles, do: []
 
+  @doc "The ship on a game controller: `ExPilot.Padmap.default/0` with the bindings the player's account keeps (`ExPilot.Web.Auth.padmap/1`) over it."
+  @impl true
+  def padmap(props),
+    do: props |> Elixir.Map.get(:username) |> account_padmap() |> Padmap.merge()
+
+  defp account_padmap(nil), do: %{}
+  defp account_padmap(username), do: Auth.padmap(username)
+  @impl true
+  def client_pad, do: %{turn_left: nil, turn_right: nil, projection: nil}
+
   @impl true
   def holds, do: [thrust: 450, shield: 450]
 
@@ -109,17 +124,17 @@ defmodule ExPilot.Client do
 
   @impl true
   def join_props(%{username: username} = props) do
-    base = System.get_env("XDG_CONFIG_HOME") || Path.join(System.user_home!(), ".config")
-
-    shape =
-      case File.read(Path.join([base, "expilot", username <> ".shipshape"])) do
-        {:ok, shape} -> %{shape: String.trim(shape)}
-        {:error, _} -> %{}
-      end
-
-    shape
+    username
+    |> shape_props()
     |> Elixir.Map.merge(seen_as(username))
     |> Elixir.Map.merge(param_props(Elixir.Map.get(props, :params, %{})))
+  end
+
+  defp shape_props(username) do
+    case Auth.shipshape(username) || Shipshape.read_file(username) do
+      nil -> %{}
+      shape -> %{shape: shape}
+    end
   end
 
   defp param_props(params) do
@@ -137,8 +152,8 @@ defmodule ExPilot.Client do
   defp seen_as(username), do: %{username: Alias.of(username)}
 
   @impl true
-  def arenas(%{source: {:node, node}}) do
-    case Remote.node_arenas(node) do
+  def worlds(%{source: {:node, node}}) do
+    case Remote.node_worlds(node) do
       {:ok, arenas} ->
         for %{map: name} <- arenas,
             arena = :rpc.call(node, Arenas, :map, [name]),
@@ -152,8 +167,8 @@ defmodule ExPilot.Client do
     end
   end
 
-  def arenas(%{source: {:url, url, token}}) do
-    case Remote.arenas(url <> "/api") do
+  def worlds(%{source: {:url, url, token}}) do
+    case Remote.worlds(url <> "/api") do
       {:ok, arenas} ->
         for arena <- arenas,
             do:
@@ -167,7 +182,7 @@ defmodule ExPilot.Client do
     end
   end
 
-  def arenas(_local), do: Arenas.list()
+  def worlds(_local), do: Arenas.list()
 
   defp remote_arena(arena, world),
     do: Elixir.Map.merge(arena, %{world: world, kind: arena.kind || Mode.kind(:dogfight)})
@@ -223,6 +238,8 @@ defmodule ExPilot.Client do
   def scene(view) do
     arena = Arenas.map(view.arena)
     gone = for {x, y} <- view.targets_gone, do: {:target_gone, {x, y}}
+    rubble = for pos <- view.cannons_gone, do: {:cannon_gone, pos}
+    stations = for {pos, fuel} <- view.stations, art = station_art(fuel), do: {art, pos}
 
     %{
       focus: view.focus,
@@ -237,9 +254,13 @@ defmodule ExPilot.Client do
           shot_movers(view.shots) ++
           missile_movers(view.missiles) ++
           beam_movers(view.beams) ++
-          view.particles ++ gone
+          view.particles ++ gone ++ rubble ++ stations
     }
   end
+
+  defp station_art(fuel) when fuel <= 0, do: :fuel_empty
+  defp station_art(fuel) when fuel < 250, do: :fuel_low
+  defp station_art(_full), do: nil
 
   defp cell_fun(nil, _gone), do: fn _ -> {:space, [], nil} end
 
@@ -333,9 +354,10 @@ defmodule ExPilot.Client do
 
   @doc """
   The hud's parts in order, each tagged: `:radar` (12 rows), then for a pilot `:name`,
-  `:fuel`, `:score`, `:lives`, `:race`, `:status`, a blank, `:items` (a heading and a
-  row an item), a blank and `:scores`; for a watcher `:watching` in place of the pilot
-  rows; and last `:messages`, the latest three, each a row of elements.
+  `:fuel`, `:score`, `:lives`, `:race`, `:status`, while the view carries an `epitaph`
+  `:death` ("destroyed") and `:cause` (what did it), a blank, `:items` (a heading
+  and a row an item), a blank and `:scores`; for a watcher `:watching` in place of the
+  pilot rows; and last `:messages`, the latest three, each a row of elements.
   """
   @spec hud_parts(map()) :: [{atom(), [term()]}]
   def hud_parts(%{me: nil} = view) do
@@ -394,8 +416,17 @@ defmodule ExPilot.Client do
       lives: [label(lives_text(me.lives) <> "  enemies " <> Integer.to_string(view.enemies))],
       race: [label(race_text(view.race))],
       status: [label(status_text(me, view.watching), style: %{fg: :cyan})]
+    ] ++ death_lines(me)
+  end
+
+  defp death_lines(%{epitaph: cause}) when is_binary(cause) do
+    [
+      death: [label("destroyed", style: %{fg: :red, bold: true})],
+      cause: [label(cause, style: %{fg: :yellow})]
     ]
   end
+
+  defp death_lines(_me), do: []
 
   defp inventory_lines(me) do
     carried =

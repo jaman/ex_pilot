@@ -1,30 +1,38 @@
 defmodule ExPilot.Robot do
   @moduledoc """
   A robot's brain for `Cauldron2D.Robot`: a robot joins a world as `{:robot, n}` and
-  flies by its view, deciding every few frames here.
+  flies by its view, deciding every few frames here, the way XPilot's default robots do.
 
   On its base it turns to face away from the wall the base sits on and thrusts off,
-  burning straight until it is clear. In flight it picks the nearest live enemy it has
-  a clear line to and steers for the clear heading nearest the enemy's — clear as far as
-  it would travel in the time a turn takes — thrusting while far and below cruising
-  speed (slower where the map allows no shields, under the speed a wall crash takes), and
-  firing while lined up within reach; when drifting into a wall it turns to
-  face away and thrusts to brake, and it raises its shield when a shot is close. With
-  no enemy in sight it looks for a way to one of the three nearest on the arena's coarse
-  map (`ExPilot.Robot.Route`) and flies for the furthest point of that way it can see,
-  holding its fire; with none it holds its course the same way. Low on fuel, with a fuel station in sight, it
-  makes for the station and hovers there until the tank is full. A robot whose ship is
+  burning straight until it is clear. In flight it fights the enemy it has locked on
+  to: it steers for the clear heading nearest the point the enemy will be at when a
+  shot arrives — the enemy's position led by its velocity less the robot's own — and
+  fires whenever the enemy is within a shot's reach with a clear line and somewhere in
+  the half circle ahead, however far off the nose; the gun's own rate paces the shots (it does not fire on
+  its way to a fuel station). It flies at a speed
+  for the distance: slow up close, cruising in between, its attack speed when far, and
+  brakes when drifting into a wall. It raises its shield, and holds its fire, when a
+  shot is about to reach it, most of the time, or an enemy is right beside it, always; where the
+  map allows no shields it thrusts away from an enemy within three tiles, or one it is
+  closing on within a second, instead. Moving away from where it wants to go, it thrusts
+  toward it to brake. With no
+  lock it looks for a way to one of the three nearest enemies on the arena's coarse map
+  (`ExPilot.Robot.Route`) and flies for the furthest point of that way it can see; with
+  none it holds its course. Below 500 fuel, with a station in sight that has fuel, it
+  makes for the station and hovers there until the tank is full.
+
+  Every robot has a skill, drawn by `Cauldron2D.Robot` between 0.3 and 1.0 unless
+  given. It is XPilot's `attack` (skill × 99) and `defense` (100 − attack): how often
+  the robot takes a lock (`lock/4` acquires one on a third of its decisions, and only
+  while `tick mod 100 < attack`), how fast it flies when attacking, and how often it
+  bothers to shield (`85 + defense / 7 − attack / 50` per cent). A robot whose ship is
   gone from the arena — a player took its base — leaves the world and stops.
 
   The coarse map is built once per map name and kept, so a map's name must be unique
   among the maps open at once, as the radar's must be.
 
-  Every robot has a skill, drawn by `Cauldron2D.Robot` between 0.3 and 1.0 unless
-  given: it sets how tightly it aims, how far it fires from, how often it holds its
-  fire, how fast it reacts (the runner's cadence) and how late it raises its shield.
-
       Cauldron2D.Robot.start_link(brain: ExPilot.Robot, world: world, number: 1, brain_opts: [arena: :dogfight])
-      ExPilot.Robot.decide(view, grid, 0, skill: 0.6, stations: stations, route: route, tick: tick)
+      ExPilot.Robot.decide(view, grid, 0, skill: 0.6, stations: stations, route: route, tick: tick, lock: :alice)
   """
 
   @behaviour Cauldron2D.Robot
@@ -33,23 +41,26 @@ defmodule ExPilot.Robot do
   alias Cauldron2D.Grid.Coarse, as: Route
   alias ExPilot.{Arenas, Map, Ship}
 
-  @reach 18.0
-  @fire_cone 2
-  @close 7.0
   @lookahead 3.0
   @coast 0.6
-  @cruise 6.0
   @turn_time 0.6
-  @shield_reach 2.5
+  @shield_reach 1.7
+  @beside 1.4
+  @evade 2.7
+  @evade_time 0.8
   @align 8
+  @front 16
   @launch_burn 12
-  @refuel_below 350.0
+  @refuel_below 500.0
   @station_sight 25.0
   @station_hover 1.5
   @sought 3
+  @default_shot_speed 7.2
+  @default_shot_range 36.0
+  @default_unit_speed 12 / 35
 
   @impl Cauldron2D.Robot
-  def init(_opts), do: %{grid: nil, stations: nil, route: nil, burn: 0}
+  def init(_opts), do: %{grid: nil, stations: nil, route: nil, burn: 0, lock: nil}
 
   @impl Cauldron2D.Robot
   def gone?(%{me: nil}), do: true
@@ -64,15 +75,18 @@ defmodule ExPilot.Robot do
         route: memory.route || route_for(view)
     }
 
+    lock = lock(view, memory.grid, memory.lock, skill: skill, tick: tick)
+
     {held, burn} =
       decide(view, memory.grid, memory.burn,
         skill: skill,
         stations: memory.stations,
         route: memory.route,
-        tick: tick
+        tick: tick,
+        lock: lock
       )
 
-    {%{held: held, aim: nil}, %{memory | burn: burn}}
+    {%{held: held, aim: nil}, %{memory | burn: burn, lock: lock}}
   end
 
   defp grid_for(%{arena: name}) do
@@ -104,7 +118,29 @@ defmodule ExPilot.Robot do
     end
   end
 
-  @doc "The actions to hold for `view`, given the arena's collision grid, with no launch burn running."
+  @doc """
+  The enemy the robot fights, given the one it fought last decision.
+
+  A lock is kept while that enemy is alive and in sight; otherwise the nearest enemy in
+  sight is taken on every third decision while `tick mod 100` is under the robot's
+  attack, and nil until then. `opts`: `:skill` (default 1.0) and `:tick` (default 0).
+  """
+  @spec lock(map(), Collision.grid(), term(), keyword()) :: term()
+  def lock(%{me: nil}, _grid, _lock, _opts), do: nil
+
+  def lock(%{me: me, ships: ships} = _view, grid, lock, opts) do
+    tick = Keyword.get(opts, :tick, 0)
+    attack = attack(Keyword.get(opts, :skill, 1.0))
+    kept = Enum.find(in_sight(me, ships, grid), &(&1.id == lock))
+
+    cond do
+      kept != nil -> lock
+      rem(tick, 3) == 0 and rem(tick, 100) < attack -> nearest_id(me, in_sight(me, ships, grid))
+      true -> nil
+    end
+  end
+
+  @doc "The actions to hold for `view`, given the arena's collision grid, with no launch burn running and the nearest enemy in sight as the lock."
   @spec decide(map(), Collision.grid()) :: MapSet.t(atom())
   def decide(view, grid), do: view |> decide(grid, 0) |> elem(0)
 
@@ -113,16 +149,15 @@ defmodule ExPilot.Robot do
 
   `burn` is how many decisions of the burn remain: a landed robot turns to face up and
   thrusts off with a full burn, then holds thrust straight while the burn lasts and the
-  way ahead is clear. With the burn spent it flies: toward the nearest clear heading to
-  the nearest enemy in sight, braking when drifting into a wall, firing when lined up,
-  shielding when a shot is close; with no enemy in sight, toward the way `:route` finds
-  to the nearest one. With the tank below 350 and a station of `:stations` within 25
-  tiles the robot flies there instead and hovers within reach of it.
+  way ahead is clear. With the burn spent it flies as the module documentation says.
 
-  `opts`: `:stations`, the arena's fuel tiles (default none); `:route`, the arena's
-  `ExPilot.Robot.Route` (default none: an enemy out of sight is left alone); `:skill`,
-  0.3 to 1.0 (default 1.0); `:tick`, the frame count, which a robot with less than full
-  skill uses to hold its fire part of the time (default 0).
+  `opts`: `:lock`, the id of the enemy to fight (default the nearest in sight; `nil`
+  when there is a lock to respect but none held); `:stations`, the arena's fuel tiles
+  (default none); `:route`, the arena's `ExPilot.Robot.Route` (default none: an enemy
+  out of sight is left alone); `:skill`, 0.3 to 1.0 (default 1.0); `:tick`, the
+  decision count (default 0). The view's `rules` may carry `shot_speed` and
+  `shot_range` in tiles and `unit_speed`, tiles a second per pixel a frame; XPilot's
+  defaults at 12 frames a second stand in.
   """
   @spec decide(map(), Collision.grid(), non_neg_integer(), keyword()) ::
           {MapSet.t(atom()), non_neg_integer()}
@@ -134,17 +169,25 @@ defmodule ExPilot.Robot do
     do: {MapSet.new(launch(me)), @launch_burn}
 
   def decide(%{me: me} = view, grid, burn, opts) do
+    skill = Keyword.get(opts, :skill, 1.0)
+
     mind = %{
-      skill: Keyword.get(opts, :skill, 1.0),
+      attack: attack(skill),
+      defense: 100 - attack(skill),
       tick: Keyword.get(opts, :tick, 0),
-      route: Keyword.get(opts, :route)
+      route: Keyword.get(opts, :route),
+      lock:
+        Keyword.get_lazy(opts, :lock, fn -> nearest_id(me, in_sight(me, view.ships, grid)) end),
+      shot_speed: rule(view, :shot_speed, @default_shot_speed),
+      shot_range: rule(view, :shot_range, @default_shot_range),
+      unit_speed: rule(view, :unit_speed, @default_unit_speed)
     }
 
     cond do
       burn > 0 and clear?(me, me.heading, grid) ->
-        {MapSet.new(if(slow?(me, view), do: [:thrust], else: [])), burn - 1}
+        {MapSet.new(if(speed(me) < normal_speed(mind), do: [:thrust], else: [])), burn - 1}
 
-      station = thirsty_for(me, Keyword.get(opts, :stations, [])) ->
+      station = thirsty_for(me, view, Keyword.get(opts, :stations, [])) ->
         {refuel(view, grid, station, mind), 0}
 
       true ->
@@ -152,37 +195,172 @@ defmodule ExPilot.Robot do
     end
   end
 
-  defp thirsty_for(%{fuel: fuel} = me, stations) when fuel < @refuel_below do
+  defp attack(skill), do: skill |> Kernel.*(99) |> round() |> max(1) |> min(99)
+
+  defp rule(view, name, default),
+    do: view |> Elixir.Map.get(:rules, %{}) |> Elixir.Map.get(name, default)
+
+  defp thirsty_for(%{fuel: fuel} = me, view, stations) when fuel < @refuel_below do
+    levels = Elixir.Map.get(view, :stations, %{})
+
     stations
+    |> Enum.filter(fn pos -> Elixir.Map.get(levels, pos, 1.0) > 0 end)
     |> Enum.map(fn {x, y} -> {x + 0.5, y + 0.5} end)
     |> Enum.filter(&Collision.circles_overlap?(me.pos, @station_sight, &1, 0.0))
     |> Enum.min_by(&distance_sq(me.pos, &1), fn -> nil end)
   end
 
-  defp thirsty_for(_me, _stations), do: nil
+  defp thirsty_for(_me, _view, _stations), do: nil
 
-  defp refuel(%{me: me, ships: ships} = view, grid, station, mind) do
-    enemy = nearest_in_sight(me, ships, grid)
+  defp refuel(%{me: me} = view, grid, station, mind) do
     there? = distance_sq(me.pos, station) < @station_hover * @station_hover
     braking? = blocked?(grid, me.pos, coasting(me, view)) or (there? and speed(me) > 0.5)
-    wanted = if braking?, do: wanted(me, nil, true), else: heading_toward(me.pos, station)
+    wanted = if braking?, do: reverse_heading(me), else: heading_toward(me.pos, station)
     heading = clear_heading(me, wanted, grid)
 
     thrusting =
-      thrust_if(aligned?(me, heading, grid) and (braking? or (not there? and slow?(me, view))))
+      thrust_if(
+        aligned?(me, heading, grid) and
+          (braking? or (not there? and speed(me) < normal_speed(mind)))
+      )
 
-    shielding = shield_if(threatened?(view, mind) and me.fuel > 100 and shields?(view))
+    shielding = shield_if(guarding?(view, grid, mind) and me.fuel > 100 and shields?(view))
+    MapSet.new(turn_toward(me.heading, heading) ++ thrusting ++ shielding)
+  end
+
+  defp fly(%{me: me} = view, grid, mind) do
+    enemy = locked_enemy(view, grid, mind)
+    braking? = blocked?(grid, me.pos, coasting(me, view))
+    evading = evading(me, view, grid)
+    wanted = wanted_heading(me, view, grid, mind, enemy, braking?, evading)
+    heading = clear_heading(me, wanted, grid)
+
+    shielding =
+      shield_if((guarding?(view, grid, mind) or braking?) and me.fuel > 100 and shields?(view))
+
+    urgent? = braking? or evading != nil or shielding != [] or overshooting?(me, wanted)
+
+    thrusting =
+      thrust_if(
+        aligned?(me, heading, grid) and
+          (urgent? or speed(me) < wanted_speed(me, enemy, mind, view))
+      )
 
     MapSet.new(
-      turn_toward(me.heading, heading) ++ thrusting ++ firing(me, enemy, mind) ++ shielding
+      turn_toward(me.heading, heading) ++
+        thrusting ++ shielding ++ firing(view, grid, mind, shielding)
     )
   end
 
+  defp wanted_heading(me, _view, _grid, _mind, _enemy, true, _evading), do: reverse_heading(me)
+
+  defp wanted_heading(me, _view, _grid, _mind, _enemy, false, %{pos: pos}),
+    do: heading_toward(pos, me.pos)
+
+  defp wanted_heading(me, _view, _grid, mind, enemy, false, nil) when enemy != nil,
+    do: heading_toward(me.pos, lead(me, enemy, mind))
+
+  defp wanted_heading(me, view, grid, mind, nil, false, nil),
+    do: goal_heading(me, way_toward(me, enemies(me, view.ships), grid, mind.route))
+
+  defp evading(me, %{ships: ships} = view, grid) do
+    if shields?(view),
+      do: nil,
+      else:
+        me
+        |> in_sight(ships, grid)
+        |> Enum.filter(
+          &(Collision.circles_overlap?(me.pos, @evade, &1.pos, 0.0) or closing?(me, &1))
+        )
+        |> Enum.min_by(&distance_sq(me.pos, &1.pos), fn -> nil end)
+  end
+
+  defp closing?(me, other) do
+    {dx, dy} = {elem(other.pos, 0) - elem(me.pos, 0), elem(other.pos, 1) - elem(me.pos, 1)}
+    {vx, vy} = velocity(me)
+    {ox, oy} = velocity(other)
+    distance = max(:math.sqrt(dx * dx + dy * dy), 0.001)
+    closing = ((vx - ox) * dx + (vy - oy) * dy) / distance
+    closing > 0 and distance / closing < @evade_time
+  end
+
+  defp overshooting?(me, wanted) do
+    speed(me) > 1.0 and
+      abs(turn_delta(heading_toward({0.0, 0.0}, velocity(me)), wanted)) >= @front
+  end
+
+  defp locked_enemy(%{me: me, ships: ships}, grid, %{lock: lock}) do
+    Enum.find(in_sight(me, ships, grid), &(&1.id == lock))
+  end
+
+  defp lead(me, enemy, mind) do
+    {x, y} = enemy.pos
+    {ex, ey} = velocity(enemy)
+    {mx, my} = velocity(me)
+    flight = :math.sqrt(distance_sq(me.pos, enemy.pos)) / mind.shot_speed
+    {x + (ex - mx) * flight, y + (ey - my) * flight}
+  end
+
+  defp goal_heading(me, nil), do: me.heading
+  defp goal_heading(me, goal), do: heading_toward(me.pos, goal)
+
+  defp wanted_speed(_me, nil, mind, view), do: cruise_cap(view, 3 * normal_speed(mind))
+
+  defp wanted_speed(me, enemy, mind, view) do
+    distance = :math.sqrt(distance_sq(me.pos, enemy.pos))
+
+    cond do
+      distance < 3.0 -> normal_speed(mind)
+      distance < 8.0 -> cruise_cap(view, 3 * normal_speed(mind))
+      true -> cruise_cap(view, attack_speed(mind))
+    end
+  end
+
+  defp cruise_cap(view, wanted) do
+    case Elixir.Map.get(view, :rules) do
+      %{shields?: false, crash_speed: crash_speed} -> min(wanted, crash_speed * 0.8)
+      _shielded -> wanted
+    end
+  end
+
+  defp normal_speed(%{unit_speed: unit}), do: 6.0 * unit
+  defp attack_speed(%{attack: attack, unit_speed: unit}), do: (15.0 + attack / 25) * unit
+
+  defp firing(_view, _grid, _mind, [:shield]), do: []
+
+  defp firing(%{me: me} = view, grid, mind, _unshielded) do
+    case locked_enemy(view, grid, mind) do
+      nil ->
+        []
+
+      enemy ->
+        fire_if(
+          distance_sq(me.pos, enemy.pos) <= mind.shot_range * mind.shot_range and
+            abs(turn_delta(me.heading, heading_toward(me.pos, enemy.pos))) <= @front
+        )
+    end
+  end
+
+  defp fire_if(true), do: [:fire]
+  defp fire_if(false), do: []
+
+  defp guarding?(%{me: me, shots: shots, ships: ships}, grid, mind) do
+    shot_near? = Enum.any?(shots, &Collision.circles_overlap?(me.pos, @shield_reach, &1, 0.0))
+
+    enemy_beside? =
+      Enum.any?(
+        in_sight(me, ships, grid),
+        &Collision.circles_overlap?(me.pos, @beside, &1.pos, 0.0)
+      )
+
+    enemy_beside? or (shot_near? and cares?(mind))
+  end
+
+  defp cares?(%{attack: attack, defense: defense, tick: tick}),
+    do: rem(tick * 61 + 17, 100) < 85 + defense / 7 - attack / 50
+
   defp aligned?(me, heading, grid),
     do: abs(turn_delta(me.heading, heading)) <= @align and clear?(me, me.heading, grid)
-
-  defp threatened?(%{me: me, shots: shots}, mind),
-    do: Enum.any?(shots, &Collision.circles_overlap?(me.pos, @shield_reach * mind.skill, &1, 0.0))
 
   defp thrust_if(true), do: [:thrust]
   defp thrust_if(false), do: []
@@ -197,45 +375,11 @@ defmodule ExPilot.Robot do
     end
   end
 
-  defp fly(%{me: me, ships: ships} = view, grid, mind) do
-    {enemy, goal} = target(me, ships, grid, mind.route)
-    braking? = blocked?(grid, me.pos, coasting(me, view))
-    heading = clear_heading(me, wanted(me, goal, braking?), grid)
-    far? = enemy == nil or distance_sq(me.pos, enemy.pos) > @close * @close
-
-    thrusting =
-      thrust_if(aligned?(me, heading, grid) and (braking? or (far? and slow?(me, view))))
-
-    shielding =
-      shield_if((threatened?(view, mind) or braking?) and me.fuel > 100 and shields?(view))
-
-    MapSet.new(
-      turn_toward(me.heading, heading) ++ thrusting ++ firing(me, enemy, mind) ++ shielding
-    )
-  end
-
   defp shields?(view), do: Elixir.Map.get(view, :rules, %{shields?: true}).shields?
 
-  defp cruise(view) do
-    case Elixir.Map.get(view, :rules) do
-      %{shields?: false, crash_speed: crash_speed} -> min(@cruise, crash_speed * 0.8)
-      _shielded -> @cruise
-    end
-  end
-
-  defp wanted(me, _enemy, true) do
+  defp reverse_heading(me) do
     {vx, vy} = velocity(me)
     heading_toward({0.0, 0.0}, {-vx, -vy})
-  end
-
-  defp wanted(me, nil, false), do: me.heading
-  defp wanted(me, goal, false), do: heading_toward(me.pos, goal)
-
-  defp target(me, ships, grid, route) do
-    case nearest_in_sight(me, ships, grid) do
-      nil -> {nil, way_toward(me, enemies(me, ships), grid, route)}
-      enemy -> {enemy, enemy.pos}
-    end
   end
 
   defp way_toward(_me, _enemies, _grid, nil), do: nil
@@ -250,17 +394,6 @@ defmodule ExPilot.Robot do
         :none -> nil
       end
     end)
-  end
-
-  defp firing(_me, nil, _mind), do: []
-
-  defp firing(me, enemy, %{skill: skill, tick: tick}) do
-    reach = @reach * (0.45 + 0.55 * skill)
-    cone = @fire_cone + round((1.0 - skill) * 5)
-    hesitating? = rem(tick, 4) < round((1.0 - skill) * 4)
-    in_reach? = Collision.circles_overlap?(me.pos, reach, enemy.pos, 0.0)
-    lined_up? = abs(turn_delta(me.heading, heading_toward(me.pos, enemy.pos))) <= cone
-    if in_reach? and lined_up? and not hesitating?, do: [:fire], else: []
   end
 
   defp clear_heading(me, wanted, grid) do
@@ -287,11 +420,17 @@ defmodule ExPilot.Robot do
     Integer.mod(wanted - heading + half, Ship.headings()) - half
   end
 
-  defp nearest_in_sight(me, ships, grid) do
+  defp in_sight(me, ships, grid) do
     me
     |> enemies(ships)
     |> Enum.filter(&match?({:clear, _}, Collision.sweep(grid, me.pos, &1.pos, 0.0)))
-    |> Enum.min_by(&distance_sq(me.pos, &1.pos), fn -> nil end)
+  end
+
+  defp nearest_id(me, enemies) do
+    case Enum.min_by(enemies, &distance_sq(me.pos, &1.pos), fn -> nil end) do
+      nil -> nil
+      enemy -> enemy.id
+    end
   end
 
   defp enemies(me, ships) do
@@ -310,8 +449,6 @@ defmodule ExPilot.Robot do
 
   defp reach(me), do: max(@lookahead, speed(me) * @turn_time)
 
-  defp slow?(me, view), do: speed(me) < cruise(view)
-
   defp speed(me) do
     {vx, vy} = velocity(me)
     :math.sqrt(vx * vx + vy * vy)
@@ -323,7 +460,7 @@ defmodule ExPilot.Robot do
     {x + vx * coast, y + vy * coast}
   end
 
-  defp velocity(me), do: Elixir.Map.get(me, :vel, {0.0, 0.0})
+  defp velocity(ship), do: Elixir.Map.get(ship, :vel, {0.0, 0.0})
 
   defp blocked?(grid, from, to),
     do: match?({:blocked, _, _, _}, Collision.sweep(grid, from, to, 0.0))

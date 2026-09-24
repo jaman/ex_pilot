@@ -8,5 +8,6 @@ defmodule ExPilot.Web.UserSocket do
   use Cauldron2D.Net.Socket,
     channel: ExPilot.Web.ArenaChannel,
     verify: {ExPilot.Web.Auth, :connect},
-    topic: "arena"
+    topic: "arena",
+    sheet_url: {ExPilot.Web.Assets, :sheet_path}
 end

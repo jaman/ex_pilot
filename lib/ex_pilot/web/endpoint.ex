@@ -17,6 +17,7 @@ defmodule ExPilot.Web.Endpoint do
   socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
 
   plug(Plug.Static, at: "/", from: {:cauldron_2d_net, "priv/static"}, only: ~w(cauldron.js))
+  plug(Plug.Static, at: "/", from: {:gamepad, "priv/static"}, only: ~w(gamepad.js))
 
   plug(Plug.Static,
     at: "/",

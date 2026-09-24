@@ -62,7 +62,10 @@ defmodule ExPilot.Ledger do
 
   @doc "The board of `period` by `metric`; `arena:` narrows it to one arena."
   @spec board(Ledger.period(), Ledger.metric(), keyword()) :: [Ledger.entry()]
-  def board(period, metric, opts \\ []), do: Ledger.board(__MODULE__, period, metric, opts)
+  def board(period, metric, opts \\ []) do
+    {arena, opts} = Keyword.pop(opts, :arena)
+    Ledger.board(__MODULE__, period, metric, Keyword.put(opts, :world, arena))
+  end
 
   @doc "The operating system process holding the ledger file, `{:held, pid}`, or nil when this one does."
   @spec held() :: {:held, pos_integer()} | nil

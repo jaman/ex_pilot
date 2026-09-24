@@ -127,6 +127,157 @@ defmodule ExPilot.RulesTest do
     end
   end
 
+  describe "XPilot's economy" do
+    test "thrust costs 0.53 a second at full power and accelerates by power over mass" do
+      flown =
+        game() |> joined(:a) |> place(:a, {4.0, 6.0}) |> holding(:a, [:thrust]) |> seconds(1.0)
+
+      assert_in_delta 1000.0 - ship(flown, :a).fuel, 0.53, 0.05
+      assert_in_delta Cauldron2D.Body.speed(ship(flown, :a).body), 9.05, 0.3
+
+      light =
+        game(shipmass: 10)
+        |> joined(:a)
+        |> place(:a, {4.0, 6.0})
+        |> holding(:a, [:thrust])
+        |> seconds(1.0)
+
+      assert_in_delta Cauldron2D.Body.speed(ship(light, :a).body), 15.1, 0.5
+
+      fast =
+        game()
+        |> joined(:a)
+        |> place(:a, {4.0, 6.0}, vel: {30.0, 0.0})
+        |> play(1)
+
+      assert_in_delta Cauldron2D.Body.speed(ship(fast, :a).body), 22.3, 0.1
+    end
+
+    test "the shield costs 2.4 a second to hold, 25 a shot it takes, and drops with the tank empty" do
+      held =
+        game() |> joined(:a) |> place(:a, {10.0, 8.0}) |> holding(:a, [:shield]) |> seconds(1.0)
+
+      assert_in_delta 1000.0 - ship(held, :a).fuel, 2.4, 0.05
+
+      game =
+        game()
+        |> joined(:a)
+        |> joined(:b, %{team: 2})
+        |> place(:a, {10.0, 6.0}, heading: 0)
+        |> place(:b, {14.0, 6.0})
+        |> holding(:b, [:shield])
+
+      before = ship(game, :b).fuel
+      hit = shoot(game, :a, 40)
+      assert ship(hit, :b).alive?
+      assert_in_delta before - ship(hit, :b).fuel, 25.0 + 2.4 * 41 / 50, 0.1
+
+      starved = game |> place(:b, {14.0, 6.0}, with: [fuel: 10.0]) |> shoot(:a, 40)
+      assert ship(starved, :b).alive?
+      assert ship(starved, :b).fuel == 0.0
+      refute ship(starved, :b).shielding?
+      refute ship(shoot(starved, :a, 40), :b).alive?
+    end
+
+    test "a shielded collision costs each ship 100" do
+      met =
+        game()
+        |> joined(:a)
+        |> joined(:b, %{team: 2})
+        |> place(:a, {10.0, 8.0}, vel: {6.0, 0.0})
+        |> place(:b, {11.5, 8.0}, vel: {-6.0, 0.0})
+        |> holding(:a, [:shield])
+        |> holding(:b, [:shield])
+        |> play(10)
+
+      assert ship(met, :a).alive? and ship(met, :b).alive?
+      assert_in_delta 1000.0 - ship(met, :a).fuel, 100.0 + 2.4 * 10 / 50, 0.1
+      assert_in_delta 1000.0 - ship(met, :b).fuel, 100.0 + 2.4 * 10 / 50, 0.1
+    end
+
+    test "a station holds 500, gives 60 a second and refills 0.72 a second for each ship" do
+      game = game() |> joined(:a) |> place(:a, {10.5, 4.5}, with: [fuel: 0.0])
+      assert game.stations == %{{10, 4} => 500.0}
+      assert_in_delta ship(seconds(game, 1.0), :a).fuel, 60.0, 1.0
+
+      drained = seconds(game, 12.0)
+      assert ship(drained, :a).fuel > 500.0 and ship(drained, :a).fuel < 520.0
+      assert drained.stations[{10, 4}] < 5.0
+
+      away = drained |> place(:a, {5.0, 8.0}) |> seconds(100.0)
+      assert_in_delta away.stations[{10, 4}], drained.stations[{10, 4}] + 72.0, 2.0
+      assert Game.view(away, :a).stations == away.stations
+    end
+
+    test "holding fire drops the shield" do
+      game =
+        game()
+        |> joined(:a)
+        |> joined(:b, %{team: 2})
+        |> place(:a, {10.0, 8.0}, heading: 0)
+        |> place(:b, {14.0, 8.0}, heading: 0)
+        |> holding(:b, [:shield, :fire])
+
+      refute ship(play(game, 1), :b).shielding?
+      refute ship(shoot(game, :a, 40), :b).alive?
+      assert ship(game |> holding(:b, [:shield]) |> play(1), :b).shielding?
+    end
+
+    test "a tank holds 2600, a pack adds 500 to 1011, a tank item a third more" do
+      full = game(initialfuel: 3000) |> joined(:a)
+      assert ship(full, :a).fuel == 2600.0
+      assert ship(full, :a).max_fuel == 2600.0
+
+      s = ship(game() |> joined(:a), :a)
+      {packed, _rng} = Items.pick_up(s, :fuel, Cauldron2D.Rng.new(7))
+      assert packed.fuel >= 1500.0 and packed.fuel <= 2011.0
+      tanked = Items.pick_up(s, :tank)
+      assert_in_delta tanked.max_fuel, 3466.67, 0.01
+    end
+
+    test "shots fly 7.2 tiles a second for 5 seconds, 6 a second, at 0.2 fuel each" do
+      game = game() |> joined(:a) |> place(:a, {4.0, 6.0}, heading: 0) |> holding(:a, [:fire])
+      once = play(game, 1)
+      [shot] = once.shots
+      assert_in_delta elem(shot.body.vel, 0), 7.2, 0.01
+      assert_in_delta shot.life, 5.0, 0.03
+      assert_in_delta 1000.0 - ship(once, :a).fuel, 0.2, 0.01
+
+      streamed = seconds(game, 1.0)
+      assert length(streamed.shots) == 6
+    end
+
+    test "a ship crashes into a wall unshielded above 6.9 tiles a second and shielded above 17" do
+      into_wall = fn speed, held ->
+        game()
+        |> joined(:a)
+        |> place(:a, {21.0, 6.0}, heading: 0, vel: {speed, 0.0})
+        |> holding(:a, held)
+        |> play(25)
+        |> ship(:a)
+      end
+
+      assert into_wall.(6.5, []).alive?
+      refute into_wall.(7.2, []).alive?
+      assert into_wall.(16.0, [:shield]).alive?
+      refute into_wall.(18.0, [:shield]).alive?
+    end
+
+    test "an unshielded bounce costs fuel by speed and mass, a shielded one nothing" do
+      bounced = fn held ->
+        game()
+        |> joined(:a)
+        |> place(:a, {21.0, 6.0}, heading: 0, vel: {6.0, 0.0})
+        |> holding(:a, held)
+        |> play(25)
+        |> ship(:a)
+      end
+
+      assert_in_delta 1000.0 - bounced.([]).fuel, 21.9, 0.5
+      assert_in_delta 1000.0 - bounced.([:shield]).fuel, 2.4 * 25 / 50, 0.05
+    end
+  end
+
   describe "the ball on its string" do
     test "a carried ball trails on a string, swings with its own velocity and is pulled by gravity" do
       game = game(gravity: -1.0) |> joined(:a, %{team: 2}) |> place(:a, {3.5, 5.5}) |> play(2)
@@ -294,7 +445,7 @@ defmodule ExPilot.RulesTest do
       assert s.fuel == 400.0
       assert Items.has?(s, :mine) and s.items.mine == 2
       assert Items.has?(s, :laser)
-      assert s.max_fuel == 1500.0
+      assert_in_delta s.max_fuel, 3466.67, 0.01
       assert s.armour == 1
 
       assert ship(Game.step(%{game | ships: Map.put(game.ships, :a, Ship.die(s, 0.0))}, @dt), :a).items.mine ==
@@ -502,7 +653,7 @@ defmodule ExPilot.RulesTest do
         |> play(1)
 
       [mine] = fused.shots
-      assert_in_delta mine.armed_in, 5.0, 0.05
+      assert_in_delta mine.armed_in, 250 / 12, 0.05
     end
 
     test "gravityangle turns uniform gravity and gravitypointsource pulls toward gravitypoint" do

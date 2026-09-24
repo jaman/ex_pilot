@@ -24,6 +24,7 @@ defmodule ExPilot.Web.Layouts do
         <link rel="stylesheet" href={Assets.path(:ex_pilot, "expilot.css")} />
         <script src={Assets.path(:phoenix, "phoenix.min.js", at: "/vendor")}></script>
         <script src={Assets.path(:phoenix_live_view, "phoenix_live_view.min.js", at: "/vendor")}></script>
+        <script src={Assets.path(:gamepad, "gamepad.js")}></script>
         <script src={Assets.path(:cauldron_2d_net, "cauldron.js")}></script>
         <script src={Assets.path(:ex_pilot, "expilot.js")}></script>
         <script>document.documentElement.classList.toggle("touch", ExPilot.touch());</script>
@@ -49,6 +50,7 @@ defmodule ExPilot.Web.Layouts do
                   hud: el.querySelector(".hud"),
                   scale: touch ? ExPilot.touchTile() : parseInt(el.dataset.scale || "32", 10),
                   keymap: JSON.parse(el.dataset.keymap),
+                  padmap: JSON.parse(el.dataset.padmap),
                   steering: ["turn_left", "turn_right"],
                   zoom: { min: 2, max: 64 },
                   onOver: function (over) { hook.pushEvent("over", over); },
@@ -60,12 +62,12 @@ defmodule ExPilot.Web.Layouts do
                 };
                 if (touch) {
                   options.fit = true;
-                  options.touch = { zones: ExPilot.touchZones(el) };
+                  options.touch = { zones: ExPilot.touchZones(el), tilt: ExPilot.touchTilt(el) };
                   options.audio = { rate: 22050, channels: 1 };
                 }
                 this.game = Cauldron.mount(el.querySelector("canvas"), options);
                 if (touch) ExPilot.touchZoom(el, this.game);
-                ExPilot.musicToggles(el.closest(".arena-page") || el, this.game);
+                if (!touch) ExPilot.musicToggles(el.closest(".arena-page") || el, this.game);
                 this.onMeterKey = function (event) {
                   var meter = document.getElementById("meter");
                   if (event.code === "KeyM" && meter && !event.repeat) meter.hidden = !meter.hidden;
@@ -76,6 +78,19 @@ defmodule ExPilot.Web.Layouts do
                 window.removeEventListener("keydown", this.onMeterKey);
                 ExPilot.leavePage();
                 if (this.game) this.game.stop();
+              }
+            };
+            hooks.Pad = {
+              mounted: function () { this.reader = ExPilot.padCapture(this.el); },
+              destroyed: function () { if (this.reader) this.reader.stop(); }
+            };
+            hooks.Tilt = {
+              mounted: function () {
+                var hook = this;
+                this.el.addEventListener("change", function (event) {
+                  if (event.target.name !== "tilt" || !event.target.checked) return;
+                  ExPilot.askTilt().then(function (state) { hook.pushEvent("motion", { state: state }); });
+                });
               }
             };
             var liveSocket = new LiveView.LiveSocket("/live", Phoenix.Socket, { hooks: hooks, params: { _csrf_token: csrf, kind: ExPilot.touch() ? "touch" : "web" } });

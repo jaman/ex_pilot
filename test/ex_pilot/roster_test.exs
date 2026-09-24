@@ -66,6 +66,26 @@ defmodule ExPilot.RosterTest do
     assert [%{what: :logged_in, id: "cal", kind: :web} | _] = Enum.reverse(Roster.lately())
   end
 
+  test "keeping the roster starts no arena" do
+    :ok = Arenas.register(:idle_one, @fixture, robots: 0)
+    on_exit(fn -> Arenas.close(:idle_one) end)
+    world = Arenas.world_name(:rostered)
+    :ok = Player.join(world, "eve", %{username: "eve"})
+    assert :ok == wait(fn -> match?([%{id: "eve", arena: :rostered}], Roster.online()) end)
+    :ok = Player.leave(world, "eve")
+    assert :ok == wait(fn -> Roster.online() == [] end)
+    refute Arenas.running?(:idle_one)
+  end
+
+  test "a world that stops takes its pilots off the roster" do
+    world = Arenas.world_name(:rostered)
+    :ok = Player.join(world, "dee", %{username: "dee"})
+    assert :ok == wait(fn -> match?([%{id: "dee", arena: :rostered}], Roster.online()) end)
+    :ok = Arenas.stop(:rostered)
+    assert :ok == wait(fn -> Roster.online() == [] end)
+    assert [%{what: :left, id: "dee", arena: :rostered} | _] = Roster.lately()
+  end
+
   test "robots are not on the roster" do
     world = Arenas.world_name(:rostered)
     :ok = Player.join(world, "bob", %{username: "bob"})

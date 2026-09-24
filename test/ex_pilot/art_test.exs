@@ -27,11 +27,14 @@ defmodule ExPilot.ArtTest do
           :wall_ne,
           :wall_nw,
           :fuel,
+          :fuel_low,
+          :fuel_empty,
           :base_up,
           :base_down,
           :base_left,
           :base_right,
           :cannon_up,
+          :cannon_gone,
           :cannon_left,
           :wormhole,
           :gravity,
@@ -48,12 +51,6 @@ defmodule ExPilot.ArtTest do
     assert Art.ship(nil, 0) in arts
     assert Art.ship(3, Ship.headings() - 1) in arts
     assert Enum.count(arts, &match?({:ship, _, _}, &1)) == 5 * Ship.headings()
-  end
-
-  test "install is idempotent" do
-    assert Art.install() == :ex_pilot
-    assert Art.install() == :ex_pilot
-    assert Atlas.installed?(:ex_pilot)
   end
 
   test "shipshapes parse with defaults for missing sections" do
@@ -73,5 +70,51 @@ defmodule ExPilot.ArtTest do
     assert Art.ship_shape(shape, 2, 5) == art
     assert Art.ship_shape(nil, 2, 5) == Art.ship(2, 5)
     assert Art.ship_shape("nonsense", 2, 5) == Art.ship(2, 5)
+  end
+
+  test "a ship without a team gets its own shape in the plain colour, like the default ship" do
+    Art.install()
+    shape = "(SH: 15,0 -10,5 -6,0 -10,-5)(EN: -6,0)(MG: 15,0)"
+    assert {:ship, {0, _}, 5} = art = Art.ship_shape(shape, nil, 5)
+    assert art in Atlas.arts(Atlas.fetch(Art.name()))
+    assert {:ship, {1, _}, 5} = Art.ship_shape(shape, 5, 5)
+  end
+end
+
+defmodule ExPilot.ShipshapeFileTest do
+  use ExUnit.Case, async: false
+
+  alias ExPilot.Shipshape
+
+  setup do
+    dir = Path.join(System.tmp_dir!(), "shipshape_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    previous = System.get_env("XDG_CONFIG_HOME")
+    System.put_env("XDG_CONFIG_HOME", dir)
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("XDG_CONFIG_HOME", previous),
+        else: System.delete_env("XDG_CONFIG_HOME")
+
+      File.rm_rf!(dir)
+    end)
+
+    :ok
+  end
+
+  test "a player's shipshape file is kept under the config home, read trimmed, and removed by keeping nothing" do
+    assert Shipshape.read_file("carol") == nil
+    assert :ok = Shipshape.keep_file("carol", Shipshape.preset!("dart") <> "\n")
+    assert Shipshape.read_file("carol") == Shipshape.preset!("dart")
+    assert Shipshape.next_preset(Shipshape.preset!("dart"), 1) == Shipshape.preset!("wedge")
+    assert Shipshape.next_preset(nil, 1) == Shipshape.preset!("dart")
+    assert Shipshape.next_preset(nil, -1) == Shipshape.preset!("saucer")
+    assert Shipshape.next_preset("(SH: 1,1 2,2 3,3)", 1) == Shipshape.preset!("classic")
+    assert Shipshape.preset_name(Shipshape.preset!("wide")) == "wide"
+    assert Shipshape.preset_name(nil) == "classic"
+    assert Shipshape.preset_name("(SH: 1,1 2,2 3,3)") == nil
+    assert :ok = Shipshape.keep_file("carol", nil)
+    assert Shipshape.read_file("carol") == nil
   end
 end

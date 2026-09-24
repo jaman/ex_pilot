@@ -80,8 +80,13 @@ kit, `shotswallbounce`, `friction`, `allowplayercrashes`, `targetkillteam`,
 `treasurekillteam`, `dropitemonkillprob`, `laserisstungun`, `shieldeditempickup`,
 `gravityangle`, `gravitypoint`, `maxunshieldedwallbouncespeed`,
 `maxshieldedwallbouncespeed`, `wallbouncefueldrainmult`, `timing`, `teamplay`… — the
-full list is in `ExPilot.Map`. A ship sits on its base facing away from the wall the base
-is on — up off a floor, down under a ceiling, sideways off a wall — and launches that way.
+full list is in `ExPilot.Map`. XPilot's per-frame values (shot speed and life, fire
+rate, bounce speeds, friction, gravity) are read at the map's `framespersecond`, 12
+unless it says otherwise, so a map written for 24 runs twice as briskly. The fuel
+economy is XPilot's (`ExPilot.Game`'s "Fuel"), and `EXPILOT_BALANCE.md` at the
+repository root has the numbers side by side with the XPilot source. A ship sits on
+its base facing away from the wall the base is on — up off a floor, down under a
+ceiling, sideways off a wall — and launches that way.
 
 ## Keys held and keys repeated
 
@@ -93,6 +98,20 @@ holding the key holds it until about 150 ms after you let go.
 In the browser the pointer's aim follows the ship: it is worked out again from where the
 mouse sits after every draw, so a ship flying under a still mouse keeps aiming ahead of
 itself.
+
+On a phone the thumbstick and, when the account's touch controls say so, the device's
+tilt both steer the same way: an `aim` a fixed distance from the ship in the direction
+of the deflection, which the game turns the ship toward. Tilt is read from
+`deviceorientation` as the gravity vector (continuous where the reported angles wrap
+past vertical), turned into roll and pitch, rotated into the screen's frame by
+`screen.orientation.angle`, and measured from the pose the first reading was taken in,
+which is taken again when the screen turns or the page comes back into view. Twenty-two
+degrees is full deflection, the inner 12% is dead, and readings are smoothed at 0.4 a
+sample. With tilt on the stick holds thrust from the lightest touch, at its `least`
+strength until pushed past its ring, and takes the aim from the tilt only while it is
+past the ring; letting go hands the aim straight back. The tilt asks for motion access
+on the first tap where the browser wants asking (iOS), and the settings page asks when
+tilt is switched on, so the prompt shows where the choice is made.
 
 ## Sound over ssh
 

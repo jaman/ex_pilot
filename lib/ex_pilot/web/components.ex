@@ -9,7 +9,7 @@ defmodule ExPilot.Web.Components do
 
   alias Cauldron2D.Net.Sheet
   alias ExPilot.Art
-  alias ExPilot.Web.PilotsLive
+  alias ExPilot.Web.{Assets, PilotsLive}
   alias Phoenix.LiveView.JS
 
   @sprite_scale 3
@@ -72,7 +72,7 @@ defmodule ExPilot.Web.Components do
     """
   end
 
-  @doc "The inline style that shows `art` from `/atlas.png`."
+  @doc "The inline style that shows `art` from the versioned sheet."
   @spec sprite_style(term()) :: String.t()
   def sprite_style(art) do
     sheet = Sheet.cached(Art.name())
@@ -81,6 +81,6 @@ defmodule ExPilot.Web.Components do
     {width, height} = Sheet.dimensions(sheet)
     scale = @sprite_scale
 
-    "background-position: -#{x * scale}px -#{y * scale}px; background-size: #{width * scale}px #{height * scale}px; width: #{sheet.tile * scale}px; height: #{sheet.tile * scale}px"
+    "background-image: url(#{Assets.sheet_path()}); background-position: -#{x * scale}px -#{y * scale}px; background-size: #{width * scale}px #{height * scale}px; width: #{sheet.tile * scale}px; height: #{sheet.tile * scale}px"
   end
 end

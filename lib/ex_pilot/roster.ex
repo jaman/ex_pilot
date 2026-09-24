@@ -11,7 +11,8 @@ defmodule ExPilot.Roster do
       #=> [%{what: :left, id: "bob", kind: nil, arena: :dogfight, at: 1789718350}, ...]
 
   A pilot in an arena with no session of their own — a desktop client on another
-  machine — is listed with `kind: nil`. Robots are left out. `lately/0` holds the last
+  machine — is listed with `kind: nil`; a world that stops takes everyone in it off the
+  roster as having left. Robots are left out. `lately/0` holds the last
   `#{100}` events, newest first: `:logged_in` and `:logged_out` with the session's kind,
   `:joined` and `:left` with the arena. `subscribe/0` brings `{:roster, :changed}` on every
   change, over `ExPilot.Web.PubSub`.
@@ -58,7 +59,7 @@ defmodule ExPilot.Roster do
   def init(_opts) do
     Presence.subscribe()
     Sessions.subscribe()
-    {:ok, %{sessions: %{}, arenas: %{}, lately: []}}
+    {:ok, %{sessions: %{}, arenas: %{}, worlds: %{}, lately: []}}
   end
 
   @impl true
@@ -94,8 +95,20 @@ defmodule ExPilot.Roster do
     changed(%{
       state
       | arenas: Map.put(state.arenas, {world, id}, presence),
+        worlds: watched(state.worlds, world),
         lately: noted(state.lately, :joined, id, nil, arena)
     })
+  end
+
+  def handle_info({:DOWN, _ref, :process, world, _reason}, state) do
+    {gone, arenas} = Map.split_with(state.arenas, fn {{pid, _id}, _} -> pid == world end)
+
+    lately =
+      Enum.reduce(Map.values(gone), state.lately, fn %{id: id, arena: arena}, acc ->
+        noted(acc, :left, id, nil, arena)
+      end)
+
+    changed(%{state | arenas: arenas, worlds: Map.delete(state.worlds, world), lately: lately})
   end
 
   def handle_info({:cauldron_players, world, :left, id}, state) do
@@ -132,6 +145,12 @@ defmodule ExPilot.Roster do
     Enum.sort_by(sessions ++ only_in_arenas, &{&1.since, &1.id})
   end
 
+  defp watched(worlds, world) do
+    if Map.has_key?(worlds, world),
+      do: worlds,
+      else: Map.put(worlds, world, Process.monitor(world))
+  end
+
   defp noted(lately, what, id, kind, arena) do
     event = %{what: what, id: id, kind: kind, arena: arena, at: System.system_time(:second)}
     Enum.take([event | lately], @kept)
@@ -139,7 +158,7 @@ defmodule ExPilot.Roster do
 
   defp arena_of(world) do
     Enum.find_value(Arenas.list(), fn %{id: id} ->
-      if GenServer.whereis(Arenas.world_name(id)) == world, do: id
+      if Cauldron2D.Worlds.running(id) == world, do: id
     end)
   end
 end

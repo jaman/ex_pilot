@@ -52,9 +52,25 @@ defmodule ExPilot.Wx.Screens do
   @spec metrics() :: [{atom(), String.t()}]
   def metrics, do: ExPilot.Ledger.metrics()
 
-  @doc "The settings screen's rows, top to bottom: the fields of `Cauldron2D.Drafter.Client.Settings` it changes."
-  @spec settings_rows() :: [:sfx | :music | :pointer]
-  def settings_rows, do: [:sfx, :music, :pointer]
+  @doc "The settings screen's rows, top to bottom: the sound levels and the pointer switch of `Cauldron2D.Drafter.Client.Settings`, and the ship (`ExPilot.Shipshape`'s presets, kept in the player's shipshape file for the arenas this program runs)."
+  @spec settings_rows() :: [:sfx | :music | :pointer | :ship]
+  def settings_rows, do: [:sfx, :music, :pointer, :ship]
+
+  @sections [{"SOUND", [:sfx, :music]}, {"FLYING", [:pointer]}, {"SHIP", [:ship]}]
+
+  @keys [
+    {"turn", "A D  or  ← →   the pointer steers too"},
+    {"thrust", "W  ↑  or the right button"},
+    {"fire", "space  F  or the left button"},
+    {"shield", "S  shift"},
+    {"next ship", "Enter, when watching"},
+    {"gear", "1 mine  2 missile  3 laser  N next missile"},
+    {"", "C cloak  E ecm  R transporter  G tractor"},
+    {"", "B pressor  X deflector  P phasing  U hyperjump"},
+    {"", "[ ] emergency shield, thrust  O autopilot  V connector"},
+    {"view", "+ −  wheel zoom   0 back   M frames a second"},
+    {"", "Tab settings   Esc or Q leaves for the lobby"}
+  ]
 
   defp title(%{title: %{name: name} = info} = state, {width, height}) do
     centre = div(width, 2)
@@ -252,24 +268,58 @@ defmodule ExPilot.Wx.Screens do
   end
 
   defp settings(state, {width, height}) do
-    left = div(width, 2) - 300
-    top = div(height, 4)
+    left = div(width, 2) - 560
+    keys_left = div(width, 2) + 120
+    top = div(height, 6)
 
-    rows =
-      settings_rows()
-      |> Enum.with_index()
-      |> Enum.flat_map(fn {row, index} ->
-        setting_row(row, index, state, left, top + 50 + index * (@line + 10))
+    {rows, _y} =
+      Enum.reduce(@sections, {[], top + 60}, fn {heading, fields}, {items, y} ->
+        section =
+          fields
+          |> Enum.map(&{&1, Enum.find_index(settings_rows(), fn row -> row == &1 end)})
+          |> Enum.with_index()
+          |> Enum.flat_map(fn {{row, index}, offset} ->
+            setting_row(row, index, state, left, y + 30 + offset * (@line + 10))
+          end)
+
+        {items ++ [{left, y, heading, @dim, :small, nil} | section],
+         y + 30 + length(fields) * (@line + 10) + 24}
       end)
 
-    [{left, top - 50, "Settings", @text, :big, nil}] ++
+    keys =
+      @keys
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {{name, text}, i} ->
+        y = top + 90 + i * (@line + 4)
+        [{keys_left, y, name, @cyan, :small, nil}, {keys_left + 110, y, text, @text, :small, nil}]
+      end)
+
+    [
+      {left, top, "Settings", @text, :big, nil},
+      {keys_left, top + 60, "KEYS", @dim, :small, nil}
+    ] ++
       rows ++
+      keys ++
       [
         {left, height - 70,
          "↑↓  choose     ←→  change     Enter  switch     Esc  " <> back_text(state.from), @dim,
          :small, @escape},
         {left, height - 40, Map.get(state, :status, ""), @amber, :small, nil}
       ]
+  end
+
+  defp setting_row(:ship, index, state, left, y) do
+    chosen? = index == state.setting
+    name = ExPilot.Shipshape.preset_name(Map.get(state, :ship)) || "your own"
+
+    label =
+      if(chosen?, do: "▶ ", else: "  ") <> String.pad_trailing("ship", 18) <> name
+
+    [
+      {left, y, label, if(chosen?, do: @cyan, else: @text), :normal, {:setting, index}},
+      {left + 520, y, "◀", @amber, :big, {:step, index, -1}},
+      {left + 560, y, "▶", @amber, :big, {:step, index, 1}}
+    ]
   end
 
   defp setting_row(:pointer, index, state, left, y) do

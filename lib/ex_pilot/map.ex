@@ -30,7 +30,7 @@ defmodule ExPilot.Map do
 
   ## Options
 
-  `option/2` reads `edgewrap`, `teamplay`, `teamimmunity`, `gravity`, `gravityangle`,
+  `option/2` reads `framespersecond`, `edgewrap`, `teamplay`, `teamimmunity`, `gravity`, `gravityangle`,
   `gravitypoint`, `gravitypointsource`, `friction`, `shotspeed`,
   `shotlife`, `maxrobots`, `maxplayershots`, `limitedlives`, `worldlives`, `mapname`,
   `mapauthor`, `maxunshieldedwallbouncespeed` and `maxshieldedwallbouncespeed` (in
@@ -40,10 +40,15 @@ defmodule ExPilot.Map do
   `allowplayerkilling` (`playerkillings`), `allowplayercrashes`, `allowplayerbounces`,
   `playerwallbouncebrakefactor`, `targetkillteam`, `treasurekillteam`,
   `dropitemonkillprob`, `laserisstungun`, `minefusetime` and `firerepeatrate` (frames),
-  `shieldeditempickup`, `shieldedmining`, `ballswallbounce`, `checkpointradius` and
-  `playersonradar`, with XPilot's defaults where the map is silent — except the
-  unshielded bounce speed, whose default here is 3.5 units per frame so that a ship at
-  cruising speed still crashes, the bounce brake factor (0.5) and the fire rate (4 frames).
+  `shieldeditempickup`, `shieldedmining`, `ballswallbounce`, `checkpointradius`,
+  `playersonradar`, `cannondeadtime` (frames), `cannonpoints`, `cannonmaxscore`, `shipmass` and
+  `allowshields` (or its old name, `playershielding`;
+  `shields?/1` reads both), with XPilot's defaults where the map is silent.
+
+  XPilot's physics runs once a frame, `framespersecond` times a second (12 unless the
+  map says otherwise), in pixels of a 35-pixel block. `speed/2`, `acceleration/2`,
+  `seconds/2`, `per_second/2` and `drag/2` turn a map's per-frame values into tiles and
+  seconds at the map's frame rate; `pixels_per_frame/2` goes the other way.
 
   `gravity_point/1` is the `gravitypoint` option as a point.
   """
@@ -66,16 +71,18 @@ defmodule ExPilot.Map do
   @defaults %{
     edgewrap: {:boolean, false},
     teamplay: {:boolean, false},
-    gravity: {:float, -2.24},
+    framespersecond: {:integer, 12},
+    gravity: {:float, -0.14},
     shotspeed: {:float, 21.0},
-    shotlife: {:integer, 90},
+    shotlife: {:integer, 60},
     maxrobots: {:integer, 4},
-    maxplayershots: {:integer, 15},
+    maxplayershots: {:integer, 256},
+    shipmass: {:float, 20.0},
     limitedlives: {:boolean, false},
     worldlives: {:integer, 0},
     mapname: {:string, "unnamed"},
     mapauthor: {:string, "unknown"},
-    maxunshieldedwallbouncespeed: {:float, 3.5},
+    maxunshieldedwallbouncespeed: {:float, 20.0},
     maxshieldedwallbouncespeed: {:float, 50.0},
     wallbouncefueldrainmult: {:float, 1.0},
     teamimmunity: {:boolean, true},
@@ -106,6 +113,7 @@ defmodule ExPilot.Map do
     itemtractorbeamprob: {:float, 0.00002},
     itemautopilotprob: {:float, 0.00002},
     allowshields: {:boolean, true},
+    playershielding: {:boolean, true},
     initialfuel: {:float, 1000.0},
     initialtanks: {:integer, 0},
     initialecms: {:integer, 0},
@@ -136,18 +144,21 @@ defmodule ExPilot.Map do
     allowplayerbounces: {:boolean, true},
     targetkillteam: {:boolean, false},
     treasurekillteam: {:boolean, false},
-    dropitemonkillprob: {:float, 1.0},
+    dropitemonkillprob: {:float, 0.5},
     laserisstungun: {:boolean, false},
     minefusetime: {:float, 0.0},
-    firerepeatrate: {:float, 4.0},
+    firerepeatrate: {:float, 2.0},
     gravityangle: {:float, 90.0},
     gravitypoint: {:string, "0,0"},
     gravitypointsource: {:boolean, false},
     shieldeditempickup: {:boolean, false},
     shieldedmining: {:boolean, false},
     ballswallbounce: {:boolean, true},
-    playerwallbouncebrakefactor: {:float, 0.5},
+    playerwallbouncebrakefactor: {:float, 0.89},
     checkpointradius: {:float, 6.0},
+    cannondeadtime: {:float, 72.0},
+    cannonpoints: {:integer, 1},
+    cannonmaxscore: {:integer, 100},
     playersonradar: {:boolean, true}
   }
 
@@ -340,6 +351,44 @@ defmodule ExPilot.Map do
   @doc "Race checkpoints in order, one per letter (the last of a repeated letter, in map order), when the map has `timing`; empty otherwise."
   @spec checkpoints(t()) :: [point()]
   def checkpoints(%__MODULE__{features: %{checkpoints: checkpoints}}), do: checkpoints
+
+  @block_pixels 35
+
+  @doc "Whether ships may shield: `allowshields`, and its old name `playershielding`, both true."
+  @spec shields?(t()) :: boolean()
+  def shields?(%__MODULE__{} = arena),
+    do: option(arena, :allowshields) and option(arena, :playershielding)
+
+  @doc "Pixels a frame as tiles a second, at the map's frame rate."
+  @spec speed(t(), number()) :: float()
+  def speed(%__MODULE__{} = arena, pixels_per_frame),
+    do: pixels_per_frame * frames(arena) / @block_pixels
+
+  @doc "Tiles a second as pixels a frame, at the map's frame rate."
+  @spec pixels_per_frame(t(), number()) :: float()
+  def pixels_per_frame(%__MODULE__{} = arena, tiles_per_second),
+    do: tiles_per_second * @block_pixels / frames(arena)
+
+  @doc "Pixels a frame squared as tiles a second squared."
+  @spec acceleration(t(), number()) :: float()
+  def acceleration(%__MODULE__{} = arena, pixels_per_frame_squared),
+    do: pixels_per_frame_squared * frames(arena) * frames(arena) / @block_pixels
+
+  @doc "A count of frames as seconds."
+  @spec seconds(t(), number()) :: float()
+  def seconds(%__MODULE__{} = arena, frames), do: frames / frames(arena)
+
+  @doc "An amount a frame as an amount a second."
+  @spec per_second(t(), number()) :: float()
+  def per_second(%__MODULE__{} = arena, per_frame), do: per_frame * frames(arena)
+
+  @doc "XPilot's `friction`, the fraction of velocity lost each frame, as the drag coefficient a second `Cauldron2D.Body.drag/3` takes."
+  @spec drag(t(), number()) :: float()
+  def drag(_arena, friction) when friction <= 0, do: 0.0
+  def drag(_arena, friction) when friction >= 1, do: 1000.0
+  def drag(%__MODULE__{} = arena, friction), do: -:math.log(1.0 - friction) * frames(arena)
+
+  defp frames(arena), do: max(1, option(arena, :framespersecond))
 
   @doc "An option ExPilot honours, converted, with XPilot's default when the map is silent."
   @spec option(t(), atom()) :: term()

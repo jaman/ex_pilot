@@ -8,11 +8,18 @@ defmodule ExPilot.Web.ArenaLive do
   thrust (`strength` in the input, from a third of full at the ring); buttons fire, shield, fire a missile
   and thrust (next ship when watching); the fuel, score and status ride over the
   world; `≡` opens the rest of the hud over it, `−`/`+` and a pinch zoom the view out
-  to the whole arena and back, `⇄` swaps the stick and the buttons between hands (kept
-  in the browser), `♪` switches the music off and on (kept in the browser, the effects
-  stay), `⤢` goes full screen and `✕` leaves for the arenas. The sound comes
+  to the whole arena and back, `⤢` goes full screen and `✕` leaves for the arenas.
+  The settings page keeps the phone's controls in the account (`ExPilot.Web.Auth.controls/2`),
+  and the page hands them to the script as `data-side` (the hand the stick is under)
+  and `data-tilt` (`on` when tilting the device steers; `data-tilt-invert` `on` when
+  its forward and back are inverted): with tilt on, the stick
+
+  thrusts — a touch for a little, a push for more — and steers only when pushed past
+  the ring, and the music is at the level the settings give it. The sound comes
   as 22 050 Hz mono there, a quarter of the desktop's bytes. With a keyboard `+`, `−`
   and the wheel zoom and `0` puts the view back, and `♪` in the bar switches the music;
+  a game controller plays as `ExPilot.Client.padmap/1` lays it out, through the
+  `gamepad` package's browser reader, on the desktop and on a phone alike;
   watching, the arrows or a drag (the mouse, a finger) pan the view, the wheel and a
   pinch zoom about the pointer or the fingers, and `0` recentres it.
   """
@@ -21,6 +28,7 @@ defmodule ExPilot.Web.ArenaLive do
 
   import ExPilot.Web.Components
 
+  alias Cauldron2D.Net.Keys
   alias ExPilot.Web.Auth
 
   @keymap %{
@@ -28,11 +36,11 @@ defmodule ExPilot.Web.ArenaLive do
     "ArrowLeft" => "turn_left",
     "KeyD" => "turn_right",
     "ArrowRight" => "turn_right",
-    "KeyS" => "thrust",
+    "KeyW" => "thrust",
     "ArrowUp" => "thrust",
     "Space" => "fire",
     "Enter" => "next_watch",
-    "KeyW" => "shield",
+    "KeyS" => "shield",
     "ShiftLeft" => "shield",
     "Digit1" => "drop_mine",
     "Digit2" => "fire_missile",
@@ -57,8 +65,15 @@ defmodule ExPilot.Web.ArenaLive do
   @spec keymap() :: map()
   def keymap, do: @keymap
 
+  @doc "The player's controller layout (`ExPilot.Client.padmap/1`) as `cauldron.js` takes it."
+  @spec padmap(String.t()) :: map()
+  def padmap(username), do: Keys.browser_padmap(ExPilot.Client.padmap(%{username: username}))
+
   @impl true
   def mount(%{"id" => id} = params, _session, socket) do
+    kind = if connected?(socket), do: Auth.kind(get_connect_params(socket)["kind"]), else: :web
+    controls = Auth.controls(socket.assigns.username, kind)
+
     {:ok,
      assign(socket,
        arena: id,
@@ -66,6 +81,10 @@ defmodule ExPilot.Web.ArenaLive do
        spectate: Map.get(params, "spectate"),
        token: Auth.token(socket.assigns.username),
        keymap: Jason.encode!(@keymap),
+       padmap: Jason.encode!(padmap(socket.assigns.username)),
+       side: controls.side,
+       tilt: if(controls.tilt, do: "on"),
+       tilt_invert: if(controls.invert, do: "on"),
        over: nil,
        refused: nil
      )}
@@ -82,20 +101,22 @@ defmodule ExPilot.Web.ArenaLive do
           <span :if={@spectate} class="badge badge-team">watching</span>
           <span class="keys">
             <span><kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> turn</span>
-            <span><kbd>S</kbd> <kbd>↑</kbd> or right button thrust</span>
+            <span><kbd>W</kbd> <kbd>↑</kbd> or right button thrust</span>
             <span><kbd>space</kbd> or left button fire</span>
-            <span><kbd>W</kbd> <kbd>shift</kbd> shield</span>
+            <span><kbd>S</kbd> <kbd>shift</kbd> shield</span>
+
             <span>the pointer steers</span>
             <span><kbd>enter</kbd> next ship when watching</span>
             <span><kbd>+</kbd><kbd>−</kbd> or the wheel zoom, <kbd>0</kbd> back</span>
             <span :if={@spectate}>arrows or a drag pan, the wheel zooms at the pointer</span>
             <span><kbd>M</kbd> frames a second</span>
+            <span>a controller: the stick aims, the d-pad turns, right trigger thrust, <kbd>B</kbd> fire, <kbd>A</kbd> shield — settings rebinds</span>
             <a href="/guide">guide</a>
           </span>
           <button type="button" class="music-toggle bar-toggle" title="music off and on">♪</button>
           <span id="meter" class="mono meter" hidden></span>
         </div>
-        <div class="arena" id="arena" phx-hook="Arena" phx-update="ignore" data-arena={@arena} data-team={@team} data-spectate={@spectate} data-token={@token} data-keymap={@keymap} data-scale="32">
+        <div class="arena" id="arena" phx-hook="Arena" phx-update="ignore" data-arena={@arena} data-team={@team} data-spectate={@spectate} data-token={@token} data-keymap={@keymap} data-padmap={@padmap} data-scale="32" data-side={@side} data-tilt={@tilt} data-tilt-invert={@tilt_invert}>
           <div class="stage"><canvas width="960" height="640" tabindex="0"></canvas></div>
           <div class="hud"></div>
           <div class="controls">
@@ -112,8 +133,6 @@ defmodule ExPilot.Web.ArenaLive do
               <div class="chrome-btn more">≡</div>
               <div class="chrome-btn zoom-out">−</div>
               <div class="chrome-btn zoom-in">+</div>
-              <div class="chrome-btn swap">⇄</div>
-              <div class="chrome-btn music-toggle">♪</div>
               <div class="chrome-btn full">⤢</div>
             </div>
           </div>

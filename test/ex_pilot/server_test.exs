@@ -144,7 +144,7 @@ defmodule ExPilot.ServerTest do
   defp into_lobby(conn, channel) do
     assert {:ok, _} = collect_until(conn, channel, "over ssh")
     :ssh_connection.send(conn, channel, "\r")
-    assert {:ok, _} = collect_until(conn, channel, "Arenas")
+    assert {:ok, _} = collect_until(conn, channel, "Worlds")
   end
 
   test "two players log in as themselves at once, each with a reverse tunnel on the same port, and share a world",
@@ -209,7 +209,7 @@ defmodule ExPilot.ServerTest do
 
     assert ExPilot.Client.refusal_text(:full) == "no base is free"
     assert ExPilot.Client.player_label({:robot, 3}) == "Robot 3"
-    assert Enum.all?(ExPilot.Client.arenas(%{}), &match?({_, {_, _, _}}, &1.kind))
+    assert Enum.all?(ExPilot.Client.worlds(%{}), &match?({_, {_, _, _}}, &1.kind))
   end
 
   test "a server stops whole — ssh, web and accounts — and can start again on the same ports", %{
@@ -235,7 +235,7 @@ defmodule ExPilot.ServerTest do
         sfx: :off
       )
 
-    assert %{music: :arena, sfx: :off} = Audio.policy()
+    assert %{music: :world, sfx: :off} = Audio.policy()
     assert {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", http, [], 1_000)
     :gen_tcp.close(socket)
     assert :ok == ExPilot.Server.stop(again)

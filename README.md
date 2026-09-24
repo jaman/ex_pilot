@@ -32,10 +32,28 @@ key that uses it.
 ## Flying
 
 The defaults are WASD with the pointer steering: `a`/`d` turn (and the ship follows the
-mouse until a turn key is pressed), `s` or the right mouse button thrust, space or the
-left mouse button fire, `w` or left shift shield — a shielded ship shows a ring. Settings
+mouse until a turn key is pressed), `w` or the right mouse button thrust, space or the
+left mouse button fire, `s` or left shift shield — a shielded ship shows a ring. Settings
+
 (`s` on the title or in the lobby, `Tab` in the arena) offers arrows and vi presets,
 rebinding, pointer steering, effects and music levels, display and frame rate.
+
+A game controller plays wherever the program runs on your own machine — the terminal
+client, the browser, the phone with a pad paired — in the Xbox layout whatever the
+hardware: the left stick aims — the ship turns to the way you push it — the d-pad turns
+left and right, the right trigger thrusts as far as you pull it (d-pad up in full),
+`B` or the right bumper fires, `A` or the left trigger shields,
+
+`X` fires a missile, `Y` drops a mine, the left bumper fires the laser, pressing the
+sticks picks the next missile and cloaks, d-pad down is the emergency shield, `Back` the
+emergency thrust, and `A` or `Start` picks the next ship when watching. The web settings
+page rebinds any of it — click an action's row and press the control, or write the
+controls out — keeps the bindings in your account for every client, and resets to the
+default; "the aim stick also thrusts when pushed past its ring" makes one stick fly the
+ship, thrust growing with the push, as the phone's thumbstick does.
+ A pad steering the ship lets go of the mouse's aim until the mouse moves.
+Over ssh the controller stays on your side of the connection, so only the keys reach
+the game.
 
 A ship sits on its base until it thrusts, and launches away from the wall its base is
 on. Held turn keys take over from the pointer until it moves again. A ship that has just
@@ -117,10 +135,14 @@ in the page, nothing to set up. Every arena card offers a team or a plain join a
 On a phone or a tablet the arena is the game alone — no bars, nothing to scroll: a
 thumbstick steers and, pushed far, thrusts (it is analog: thrust grows with the push from
 its ring to its rim); buttons fire, shield, fire a missile and thrust; fuel and score ride
-over the world, `≡` opens the rest of the hud over it, `⇄` swaps the stick and the buttons
-between hands, `♪` switches the music, `⤢` goes full screen and `✕` leaves. The pages
-have a tab bar along the bottom; "Add to Home Screen" opens the game without the browser's
-bars. `?touch=1` or `?touch=0` on any address forces the phone layout either way and is
+over the world, `≡` opens the rest of the hud over it, `⤢` goes full screen and `✕`
+leaves. The settings page keeps the phone's controls in your account: which hand the
+stick is under (the buttons go under the other), and tilt to steer — tilting the phone
+turns the ship, the stick then thrusts (a touch for a little, a push for more) and steers
+only when pushed past its ring, so a hand on each. iOS asks once for motion access when
+you switch tilt on; the phone's music level is on the same page. The pages have a tab bar
+along the bottom; "Add to Home Screen" opens the game without the browser's bars.
+`?touch=1` or `?touch=0` on any address forces the phone layout either way and is
 remembered.
 
 ## On the desktop
@@ -131,6 +153,11 @@ node, or this app — pick an arena, `Enter` joins, `w` watches, `t` picks a tea
 arena `Esc` or `q` returns to the lobby. `h` on the title is the serve screen: ssh and web
 ports, interfaces, accounts file and robots, `Enter` starts or stops the server. `--url`,
 `--name`, `--node`, `--cookie` fill the fields in. Sound plays through your speaker.
+`s` on the title or in the lobby, `Tab` in the arena, opens the settings: sound, the
+pointer steering, your ship (the presets, kept in your shipshape file for the arenas this
+program runs — a server's arenas fly what your account there says), with the keys listed
+beside them.
+
 
 ## In a terminal, with everything
 
@@ -173,7 +200,15 @@ can run `mix ex_pilot.listen` instead of ffplay; `sox` and `pacat` work too
 
 The display setting picks pixels where the terminal has them, braille, or glyphs, and the
 frame rate (auto is the terminal's best: 15 on iTerm2 and sixel terminals, 30 elsewhere).
-Your own shipshape is read from `$XDG_CONFIG_HOME/expilot/<player>.shipshape`.
+Your own shipshape is the one your account keeps — the web settings page offers a few
+by name (classic, dart, wedge, wide, saucer), drawn as you pick, or takes one written in
+XPilot's notation, `(SH: 15,0 -8,8 -8,-8)(EN: -8,0)(MG: 15,0)` — and every client flies
+it; without one, the server reads `$XDG_CONFIG_HOME/expilot/<player>.shipshape` where
+the world runs.
+
+When your ship is destroyed, every client says what did it — "shot by alice", "hit a
+wall", "hit bob's mine", "collided with carol", "ran out of fuel" — over the world from
+the explosion until two seconds after you are back on your base.
 
 ## Your name, and the name others see
 

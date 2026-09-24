@@ -33,7 +33,7 @@ defmodule ExPilot.Web.AdminLive do
   defp load(socket) do
     assign(socket,
       online: Enum.map(Roster.online(), &Map.put(&1, :seen_as, Alias.of(&1.id))),
-      arenas: Stats.arenas(),
+      arenas: Stats.worlds(),
       node: Stats.node(),
       duels: Enum.reject(Duels.list(), &(&1.ended != nil)),
       accounts: accounts(),

@@ -39,7 +39,7 @@ defmodule ExPilot.Guide do
            art: :fuel,
            name: "Fuel station",
            text:
-             "Hover within two tiles to fill the tank. Ten seconds on an empty tank loses the ship."
+             "Hover within two tiles to fill the tank. A station holds 500 and refills slowly; it dims as it empties. Ten seconds on an empty tank loses the ship."
          },
          %{
            art: :wormhole,
@@ -50,7 +50,7 @@ defmodule ExPilot.Guide do
            art: :cannon_up,
            name: "Cannon",
            text:
-             "Fires at any ship in front of it within twelve tiles. Shielded ships shrug the shots off."
+             "Fires at any ship in front of it within twelve tiles; shielded ships shrug the shots off. A shot, missile or mine destroys it for a point, and it is back six seconds later. Touch it and you are smashed — unless you have both a shield and an emergency shield up, which takes it out and takes the point."
          },
          %{
            art: :gravity,
@@ -86,13 +86,13 @@ defmodule ExPilot.Guide do
            art: :shot,
            name: "Shot",
            text:
-             "Space or the left button. Costs a little fuel; kills an unshielded ship it meets."
+             "Space or the left button. Costs a little fuel; kills an unshielded ship it meets, and drains 25 from a shielded one. Firing drops your own shield."
          },
          %{
            art: :shield,
            name: "Shield",
            text:
-             "w or shift. Bounces shots and wall hits while it burns fuel; ships that meet shielded bounce apart."
+             "s or shift. Bounces shots and wall hits while it burns fuel — every shot it takes costs 25; ships that meet shielded bounce apart at 100 each. It is down while you fire."
          },
          %{
            art: :mine,
@@ -124,8 +124,8 @@ defmodule ExPilot.Guide do
        ]},
       {"Items — fly over one to pick it up",
        [
-         item(:fuel, "Fuel pack", "Adds 300 to the tank on the spot."),
-         item(:tank, "Tank", "A bigger tank: 500 more capacity, and it comes full."),
+         item(:fuel, "Fuel pack", "Adds 500 to 1011 to the tank on the spot."),
+         item(:tank, "Tank", "A bigger tank: a third more capacity, and it comes full."),
          item(:armor, "Armour", "A layer that takes one hit that would have killed you."),
          item(
            :ecm,
@@ -160,7 +160,7 @@ defmodule ExPilot.Guide do
          item(
            :emergency_thrust,
            "Emergency thrust",
-           "] gives a burst of thrust that costs no fuel."
+           "] gives a burst of thrust as hard as fifteen afterburners."
          ),
          item(
            :emergency_shield,

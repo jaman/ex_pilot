@@ -26,7 +26,8 @@ defmodule ExPilot.Server do
       none. Default: `PORT` in the environment, else 2280
     * `:beacon`, `:beacon_port` — as `Cauldron2D.Drafter.Server` takes them
     * `:music`, `:sfx` — the browsers' and desktops' sound, as `Cauldron2D.Net.Audio.set/1`
-      takes them: music `:personal` (default), `:arena`, `:dynamic`, `:static` or `:off`; effects
+      takes them: music `:personal` (default), `:arena` (`Cauldron2D.Net.Audio`'s `:world`),
+      `:dynamic`, `:static` or `:off`; effects
       `:personal` (default) or `:off`. With `:static` the songs of `ExPilot.Music.Static` are
       rendered at 44 100 Hz stereo as the server starts, in the background, unless they
       are on disk from before, under `$XDG_CACHE_HOME/expilot/music`
@@ -73,7 +74,12 @@ defmodule ExPilot.Server do
         web: if(http in [false, 0], do: nil, else: {:ex_pilot, ExPilot.Web.Endpoint, http})
       ] ++ Keyword.take(opts, [:port, :ip, :system_dir, :beacon, :beacon_port])
 
-    Audio.set(Keyword.take(opts, [:music, :sfx]))
+    Audio.set(
+      opts
+      |> Keyword.take([:music, :sfx])
+      |> Keyword.update(:music, :personal, &music_policy/1)
+    )
+
     if Keyword.get(opts, :music) == :static, do: prerender_static()
 
     with {:ok, server} <- Server.start(server_opts) do
@@ -155,4 +161,7 @@ defmodule ExPilot.Server do
   defp arena_id(path) do
     path |> Path.basename() |> String.replace(~r/\.map(\.gz)?\z/, "") |> String.to_atom()
   end
+
+  defp music_policy(:arena), do: :world
+  defp music_policy(policy), do: policy
 end

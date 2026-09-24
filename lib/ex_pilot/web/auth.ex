@@ -1,8 +1,9 @@
 defmodule ExPilot.Web.Auth do
   @moduledoc """
   Who a browser player is: login against the server's `Drafter.Accounts`, the signed
-  token a page hands its socket, and the sound levels kept in the account. The name a
-  player is seen under is `ExPilot.Alias`'s.
+  token a page hands its socket, and what the account keeps: sound levels and touch
+  controls by kind of client, and the ship shape and the controller bindings every
+  client uses. The name a player is seen under is `ExPilot.Alias`'s.
 
   The accounts server is `ExPilot.Accounts`, as `ExPilot.Server.start/1` names it.
   """
@@ -12,6 +13,7 @@ defmodule ExPilot.Web.Auth do
   alias Cauldron2D.Drafter.Client.Settings
   alias Cauldron2D.Sessions
   alias Drafter.Accounts
+  alias ExPilot.{Padmap, Shipshape}
   alias ExPilot.Web.Endpoint
 
   @salt "ex_pilot_player"
@@ -65,6 +67,99 @@ defmodule ExPilot.Web.Auth do
     })
   end
 
+  @typedoc "How a phone or tablet is played: the hand the thumbstick is on, whether tilting the device steers, and whether the tilt's forward and back are inverted."
+  @type controls :: %{side: :left | :right, tilt: boolean(), invert: boolean()}
+
+  @doc "The account's touch controls for a kind of client (`:web` unless given): the stick on the `:left` unless moved, `tilt` and `invert` off unless switched on."
+  @spec controls(String.t(), atom()) :: controls()
+  def controls(username, kind \\ :web) do
+    settings = settings(username, kind)
+
+    %{
+      side: side(Map.get(settings, :side)),
+      tilt: Map.get(settings, :tilt) == true,
+      invert: Map.get(settings, :invert) == true
+    }
+  end
+
+  @doc "Keep the account's touch controls for a kind of client, alongside whatever else that kind's settings hold."
+  @spec put_controls(String.t(), controls(), atom()) :: :ok | {:error, term()}
+  def put_controls(username, %{side: side, tilt: tilt} = controls, kind \\ :web)
+      when side in [:left, :right] and is_boolean(tilt) do
+    key = Settings.prop_key(kind)
+    invert = Map.get(controls, :invert, false) == true
+
+    Accounts.put_props(ExPilot.Accounts, username, %{
+      key => Map.merge(settings(username, kind), %{side: side, tilt: tilt, invert: invert})
+    })
+  end
+
+  @doc "The account's ship shape in XPilot's notation, or `nil` for the classic; `nil` too without an accounts server."
+  @spec shipshape(String.t()) :: String.t() | nil
+  def shipshape(username) do
+    with true <- Process.whereis(ExPilot.Accounts) != nil,
+         {:ok, %{props: %{shipshape: shape}}} when is_binary(shape) and shape != "" <-
+           Accounts.fetch(ExPilot.Accounts, username) do
+      shape
+    else
+      _ -> nil
+    end
+  end
+
+  @doc "Keep the account's ship shape; blank goes back to the classic, and a text with no outline is `{:error, :no_outline}`."
+  @spec put_shipshape(String.t(), String.t()) :: :ok | {:error, term()}
+  def put_shipshape(username, text) do
+    case String.trim(text) do
+      "" ->
+        Accounts.put_props(ExPilot.Accounts, username, %{shipshape: nil})
+
+      shape ->
+        with {:ok, _parsed} <- Shipshape.parse(shape),
+             do: Accounts.put_props(ExPilot.Accounts, username, %{shipshape: shape})
+    end
+  end
+
+  @doc "The account's own controller bindings, action to controls, over `ExPilot.Padmap.default/0`; `%{}` where it keeps none, or without an accounts server."
+  @spec padmap(String.t()) :: Padmap.overrides()
+  def padmap(username) do
+    with true <- Process.whereis(ExPilot.Accounts) != nil,
+         {:ok, %{props: %{padmap: props}}} <- Accounts.fetch(ExPilot.Accounts, username) do
+      Padmap.from_props(props)
+    else
+      _ -> %{}
+    end
+  end
+
+  @doc "Keep the account's controller bindings — action names to their controls as `ExPilot.Padmap.parse_controls/1` reads them, only those that differ from the default; `{:error, {action, {:unknown, word}}}` at the first word that is no control, keeping nothing."
+  @spec put_padmap(String.t(), %{String.t() => String.t()}) ::
+          :ok | {:error, {String.t(), {:unknown, String.t()}}}
+  def put_padmap(username, fields) do
+    known = Map.new(Padmap.actions(), &{Atom.to_string(&1), &1})
+
+    fields
+    |> Enum.filter(fn {name, _text} -> Map.has_key?(known, name) end)
+    |> Enum.reduce_while({:ok, %{}}, fn {name, text}, {:ok, acc} ->
+      case Padmap.parse_controls(text) do
+        {:ok, controls} -> {:cont, {:ok, Map.put(acc, Map.fetch!(known, name), controls)}}
+        {:error, reason} -> {:halt, {:error, {name, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, bindings} ->
+        Accounts.put_props(ExPilot.Accounts, username, %{
+          padmap: bindings |> Padmap.overrides() |> Padmap.to_props()
+        })
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Forget the account's controller bindings, back to the default."
+  @spec reset_padmap(String.t()) :: :ok | {:error, term()}
+  def reset_padmap(username),
+    do: Accounts.put_props(ExPilot.Accounts, username, %{padmap: nil})
+
   @doc "What `Cauldron2D.Net.Socket` asks of the connect params: the token's pilot and their sound levels for the kind of client."
   @spec connect(map()) :: {:ok, %{username: String.t(), settings: map()}} | :error
   def connect(%{"token" => token} = params) do
@@ -88,6 +183,9 @@ defmodule ExPilot.Web.Auth do
     kind = socket |> Phoenix.LiveView.get_connect_params() |> Map.get("kind") |> kind()
     Sessions.track(username, kind)
   end
+
+  defp side(:right), do: :right
+  defp side(_left), do: :left
 
   defp settings(username, kind) do
     key = Settings.prop_key(kind)

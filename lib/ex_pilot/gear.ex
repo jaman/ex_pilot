@@ -16,10 +16,16 @@ defmodule ExPilot.Gear do
   alias ExPilot.{Items, Ship, Weapons}
   alias ExPilot.Map, as: Arena
 
-  @cloak_burn 20.0
-  @deflector_burn 20.0
-  @beam_burn 40.0
-  @laser_cost 30.0
+  @cloak_burn 0.07
+  @deflector_burn 0.15
+  @beam_burn 1.5
+  @laser_cost 10.0
+  @missile_cost 30.0
+  @mine_cost 60.0
+  @ecm_cost 60.0
+  @transporter_cost 60.0
+  @hyperjump_cost 60.0
+  @max_afterburners 15
   @laser_cooldown 0.5
   @ecm_reach 10.0
   @ecm_time 3.0
@@ -73,22 +79,26 @@ defmodule ExPilot.Gear do
   end
 
   defp ready?(:next_missile, _ship, _game), do: true
-  defp ready?(:fire_missile, ship, _game), do: Items.has?(ship, :missile)
+
+  defp ready?(:fire_missile, ship, _game),
+    do: Items.has?(ship, :missile) and ship.fuel >= @missile_cost
+
   defp ready?(:drop_mine, ship, game), do: mine_ready?(ship, game)
   defp ready?(:cloak, ship, _game), do: Items.has?(ship, :cloak) or ship.cloaked?
   defp ready?(:deflector, ship, _game), do: Items.has?(ship, :deflector) or ship.deflecting?
   defp ready?(:autopilot, ship, _game), do: Items.has?(ship, :autopilot) or ship.autopilot?
   defp ready?(:connector, ship, _game), do: ship.ball != nil
 
+  defp ready?(:ecm, ship, _game), do: Items.has?(ship, :ecm) and ship.fuel >= @ecm_cost
+
+  defp ready?(:transporter, ship, _game),
+    do: Items.has?(ship, :transporter) and ship.fuel >= @transporter_cost
+
+  defp ready?(:hyperjump, ship, _game),
+    do: Items.has?(ship, :hyperjump) and ship.fuel >= @hyperjump_cost
+
   defp ready?(action, ship, _game)
-       when action in [
-              :ecm,
-              :transporter,
-              :phasing,
-              :hyperjump,
-              :emergency_shield,
-              :emergency_thrust
-            ],
+       when action in [:phasing, :emergency_shield, :emergency_thrust],
        do: Items.has?(ship, action)
 
   defp ready?(_action, _ship, _game), do: false
@@ -107,11 +117,15 @@ defmodule ExPilot.Gear do
   defp apply_item(:emergency_thrust, pair), do: emergency_thrust(pair)
   defp apply_item(:connector, {ship, game}), do: {%{ship | ball: nil}, game}
 
-  defp mine_ready?(ship, game),
-    do: Items.has?(ship, :mine) and (game.settings.shielded_mining? or not ship.shielding?)
+  defp mine_ready?(ship, game) do
+    Items.has?(ship, :mine) and ship.fuel >= @mine_cost and
+      (game.settings.shielded_mining? or not ship.shielding?)
+  end
 
-  defp laser_ready?(ship, _game),
-    do: Items.has?(ship, :laser) and ship.timers.cooldown <= 0 and ship.fuel >= @laser_cost
+  defp laser_ready?(ship, game) do
+    Items.has?(ship, :laser) and ship.timers.cooldown <= 0 and ship.fuel >= @laser_cost and
+      not shielded?(ship, game.time)
+  end
 
   defp cycle_missile({ship, game}) do
     next = %{torpedo: :smart, smart: :heat, heat: :torpedo}
@@ -121,7 +135,7 @@ defmodule ExPilot.Gear do
   defp fire_missile({ship, game}) do
     missile = Weapons.missile(ship, ship.missile, game.next_id, game.settings)
 
-    {Items.spend(ship, :missile),
+    {%{Items.spend(ship, :missile) | fuel: ship.fuel - @missile_cost},
      %{game | shots: [missile | game.shots], next_id: game.next_id + 1}
      |> emit({:missile, ship.body.pos})}
   end
@@ -129,7 +143,7 @@ defmodule ExPilot.Gear do
   defp drop_mine({ship, game}) do
     mine = Weapons.mine(ship, game.next_id, game.settings.mine_fuse)
 
-    {Items.spend(ship, :mine),
+    {%{Items.spend(ship, :mine) | fuel: ship.fuel - @mine_cost},
      %{game | shots: [mine | game.shots], next_id: game.next_id + 1}
      |> emit({:mine, ship.body.pos})}
   end
@@ -175,7 +189,8 @@ defmodule ExPilot.Gear do
            else: {id, other}
       end)
 
-    {Items.spend(ship, :ecm), %{game | ships: ships} |> emit({:ecm, ship.body.pos})}
+    {%{Items.spend(ship, :ecm) | fuel: ship.fuel - @ecm_cost},
+     %{game | ships: ships} |> emit({:ecm, ship.body.pos})}
   end
 
   defp transport({ship, game}) do
@@ -191,14 +206,16 @@ defmodule ExPilot.Gear do
         nil
       end)
 
+    spent = %{Items.spend(ship, :transporter) | fuel: ship.fuel - @transporter_cost}
+
     case victim do
       nil ->
-        {Items.spend(ship, :transporter), game}
+        {spent, game}
 
       other ->
         {kind, rng} = Rng.pick(game.rng, Map.keys(other.items))
         robbed = Items.spend(other, kind)
-        taken = ship |> Items.spend(:transporter) |> Items.pick_up(kind)
+        {taken, rng} = Items.pick_up(spent, kind, rng)
 
         {taken,
          %{game | rng: rng, ships: Map.put(game.ships, other.id, robbed)}
@@ -215,8 +232,11 @@ defmodule ExPilot.Gear do
         {ship, %{game | rng: rng}}
 
       {pos, rng} ->
-        {%{Items.spend(ship, :hyperjump) | body: %{ship.body | pos: pos}},
-         %{game | rng: rng} |> emit({:hyperjump, ship.body.pos})}
+        {%{
+           Items.spend(ship, :hyperjump)
+           | body: %{ship.body | pos: pos},
+             fuel: ship.fuel - @hyperjump_cost
+         }, %{game | rng: rng} |> emit({:hyperjump, ship.body.pos})}
     end
   end
 
@@ -267,7 +287,7 @@ defmodule ExPilot.Gear do
           }
       }
 
-      {%{ship | fuel: max(0.0, ship.fuel - @beam_burn * dt)},
+      {%{ship | fuel: max(0.0, ship.fuel - Arena.per_second(game.arena, @beam_burn) * dt)},
        %{game | ships: Map.put(game.ships, other.id, pulled)}}
     else
       _ -> {ship, game}
@@ -298,14 +318,14 @@ defmodule ExPilot.Gear do
   def enemy?(_ship, %Ship{team: nil}), do: true
   def enemy?(%Ship{team: team}, %Ship{team: other}), do: team != other
 
-  @doc "Run the timed effects down for `dt` and take their running costs from the tank."
-  @spec wear(Ship.t(), float(), float()) :: Ship.t()
-  def wear(%Ship{} = ship, dt, now) do
+  @doc "Run the timed effects down for `dt` and take their running costs from the tank: a cloak 0.07 and a deflector 0.15 a frame, at the arena's frame rate."
+  @spec wear(Ship.t(), float(), float(), Arena.t()) :: Ship.t()
+  def wear(%Ship{} = ship, dt, now, arena) do
     burn =
       if(ship.cloaked?, do: @cloak_burn, else: 0.0) +
         if ship.deflecting?, do: @deflector_burn, else: 0.0
 
-    fuel = max(0.0, ship.fuel - burn * dt)
+    fuel = max(0.0, ship.fuel - Arena.per_second(arena, burn) * dt)
 
     %{
       ship
@@ -333,12 +353,18 @@ defmodule ExPilot.Gear do
     %{body | vel: {vx * keep, vy * keep}}
   end
 
-  @doc "How much harder the ship thrusts: afterburners and emergency thrust multiply it."
+  @doc "How much harder the ship thrusts: each afterburner adds a fifth, emergency thrust counts as fifteen."
   @spec thrust_factor(Ship.t(), float()) :: float()
-  def thrust_factor(%Ship{} = ship, now) do
-    burners = Map.get(ship.items, :afterburner, 0)
-    emergency = if ship.timers.emergency_thrust_until > now, do: 2.0, else: 1.0
-    (1.0 + 0.5 * burners) * emergency
+  def thrust_factor(%Ship{} = ship, now), do: 1.0 + 0.2 * afterburners(ship, now)
+
+  @doc "How much more fuel the thrust burns: an eighth more per afterburner, emergency thrust counting as fifteen."
+  @spec thrust_fuel_factor(Ship.t(), float()) :: float()
+  def thrust_fuel_factor(%Ship{} = ship, now), do: 1.0 + 0.125 * afterburners(ship, now)
+
+  defp afterburners(ship, now) do
+    if ship.timers.emergency_thrust_until > now,
+      do: @max_afterburners,
+      else: min(@max_afterburners, Map.get(ship.items, :afterburner, 0))
   end
 
   @doc "Whether the ship is shielded this tick: by its own shield, or an emergency one."

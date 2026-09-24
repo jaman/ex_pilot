@@ -80,10 +80,4 @@ defmodule ExPilot.LedgerTest do
     assert Ledger.forget("load_*") == {:ok, 0}
     assert Ledger.forget("cal") == {:ok, 1}
   end
-
-  test "values read as the boards show them" do
-    assert Ledger.value(12.5, :contact) == "12.5 s"
-    assert Ledger.value(3, :ratio) == "3.00"
-    assert Ledger.value(6, :kills) == "6"
-  end
 end

@@ -45,6 +45,7 @@ defmodule ExPilot.MixProject do
       family(:drafter, "~> 0.4.0", "../drafter", []),
       family(:french_curve, "~> 0.1.4", "../french_curve", override: true),
       family(:linocut, "~> 0.1.3", "../cauldron/linocut", []),
+      family(:gamepad, "~> 0.1.0", "../gamepad", []),
       family(:tuning_fork, "~> 0.1.11", "../tuning_fork/tuning_fork", []),
       family(:tuning_fork_speaker, "~> 0.1.11", "../tuning_fork/tuning_fork_speaker", [])
     ]

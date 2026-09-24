@@ -9,7 +9,7 @@ defmodule ExPilot.WebTest do
   alias Cauldron2D.Net.Link.Local
   alias Cauldron2D.Net.Link.Socket
   alias ExPilot.Arenas
-  alias ExPilot.Web.Auth
+  alias ExPilot.Web.{Assets, Auth}
   alias ExPilot.Web.Endpoint
 
   @endpoint ExPilot.Web.Endpoint
@@ -166,7 +166,7 @@ defmodule ExPilot.WebTest do
 
     assert %{"token" => _, "username" => "carol"} = Jason.decode!(conn.resp_body)
 
-    conn = get(build_conn(), "/api/arenas")
+    conn = get(build_conn(), "/api/worlds")
 
     assert [
              %{
@@ -184,7 +184,7 @@ defmodule ExPilot.WebTest do
     conn = get(build_conn(), "/api/stats")
 
     assert %{
-             "arenas" => [],
+             "worlds" => [],
              "node" => %{
                "processes" => processes,
                "memory_mb" => _,
@@ -202,7 +202,7 @@ defmodule ExPilot.WebTest do
     conn = get(build_conn(), "/api/stats")
 
     assert %{
-             "arenas" => [
+             "worlds" => [
                %{
                  "name" => "webtest",
                  "players" => _,
@@ -214,22 +214,6 @@ defmodule ExPilot.WebTest do
                }
              ]
            } = Jason.decode!(conn.resp_body)
-  end
-
-  test "the guide page shows every section with its sprites cut from the sheet", %{conn: conn} do
-    {:ok, _view, html} = live(logged_in(conn), "/guide")
-    assert html =~ "On the map"
-    assert html =~ "Emergency shield"
-    assert html =~ "background-position"
-
-    assert length(Regex.scan(~r/class="sprite"/, html)) ==
-             ExPilot.Guide.sections() |> Enum.flat_map(&elem(&1, 1)) |> length()
-  end
-
-  test "the stylesheet is served", %{conn: conn} do
-    conn = get(conn, "/expilot.css")
-    assert conn.status == 200
-    assert conn.resp_body =~ ".arena-card"
   end
 
   test "the arena page carries what the browser needs to mount the canvas", %{conn: conn} do
@@ -245,7 +229,154 @@ defmodule ExPilot.WebTest do
         do: assert(html =~ ~s(data-action="#{action}"))
 
     assert html =~ ~s(href="/lobby")
-    assert length(Regex.scan(~r/class="[^"]*music-toggle[^"]*"/, html)) == 2
+    assert html =~ "data-padmap="
+    assert html =~ "right_trigger"
+    assert html =~ ~s(&quot;aim&quot;:&quot;left&quot;)
+
+    assert html =~ ~s(src="/gamepad.js?vsn=)
+    assert length(Regex.scan(~r/class="[^"]*music-toggle[^"]*"/, html)) == 1
+    refute html =~ "chrome-btn swap"
+    assert html =~ ~s(data-side="left")
+    refute html =~ "data-tilt"
+  end
+
+  test "the arena page hands the phone the hand its stick is on and whether it tilts to steer",
+       %{conn: conn} do
+    :ok = Auth.put_controls("alice", %{side: :right, tilt: true, invert: true}, :touch)
+    assert Auth.controls("alice", :touch) == %{side: :right, tilt: true, invert: true}
+    assert Auth.controls("alice") == %{side: :left, tilt: false, invert: false}
+
+    {:ok, _view, html} =
+      live(put_connect_params(logged_in(conn), %{"kind" => "touch"}), "/arena/webtest")
+
+    assert html =~ ~s(data-side="right")
+    assert html =~ ~s(data-tilt="on")
+    assert html =~ ~s(data-tilt-invert="on")
+  end
+
+  test "settings keep a ship shape in the account — a preset or one written out — and every join flies it",
+       %{conn: conn} do
+    {:ok, view, html} = live(logged_in(conn), "/settings")
+    assert html =~ "<polygon"
+
+    for {name, _text} <- ExPilot.Shipshape.presets(),
+        do: assert(html =~ ~s(phx-value-name="#{name}"))
+
+    assert Auth.shipshape("alice") == nil
+    refute Map.has_key?(ExPilot.Client.join_props(%{username: "alice", settings: %{}}), :shape)
+
+    render_click(view, "preset", %{"name" => "dart"})
+    dart = ExPilot.Shipshape.preset!("dart")
+    assert Auth.shipshape("alice") == dart
+    assert %{shape: ^dart} = ExPilot.Client.join_props(%{username: "alice", settings: %{}})
+
+    custom = "(SH: 14,0 -6,9 -9,0 -6,-9)(EN: -9,0)(MG: 14,0)"
+    html = render_submit(view, "shipshape", %{"shape" => custom})
+    assert Auth.shipshape("alice") == custom
+    assert html =~ "kept"
+    assert html =~ ~s(points="14,0 -6,-9 -9,0 -6,9")
+
+    html = render_submit(view, "shipshape", %{"shape" => "(EN: 1,1)"})
+    assert Auth.shipshape("alice") == custom
+    assert html =~ "no outline"
+
+    render_submit(view, "shipshape", %{"shape" => ""})
+    assert Auth.shipshape("alice") == nil
+    refute Map.has_key?(ExPilot.Client.join_props(%{username: "alice", settings: %{}}), :shape)
+  end
+
+  test "settings keep the controller's bindings in the account, the arena page hands them to the browser, and reset goes back to the default",
+       %{conn: conn} do
+    {:ok, view, html} = live(logged_in(conn), "/settings")
+    assert html =~ ~s(name="fire")
+    assert html =~ ~s(value="b right_bumper")
+    assert html =~ "data-pad-status"
+    assert html =~ "data-pad-help"
+    assert html =~ ~r/data-pad-mac[^>]*hidden/
+    assert html =~ "Quit Steam"
+
+    for heading <- ~w(You Controller Flying Gear), do: assert(html =~ ">#{heading}<")
+    assert html =~ "Your ship"
+    assert Auth.padmap("alice") == %{}
+
+    html =
+      render_submit(view, "padmap", %{
+        "fire" => "x",
+        "shield" => "y left_trigger+",
+        "thrust" => "right_trigger+ dpad_up"
+      })
+
+    assert html =~ "kept"
+    assert Auth.padmap("alice") == %{fire: [:x], shield: [:y, {:axis, :left_trigger, :pos}]}
+    assert ExPilot.Client.padmap(%{username: "alice"}).fire == [:x]
+    assert ExPilot.Client.padmap(%{username: "alice"}).thrust == ExPilot.Padmap.default().thrust
+
+    {:ok, _view, arena} = live(logged_in(conn), "/arena/webtest")
+    assert arena =~ ~r/&quot;x&quot;:\[[^\]]*&quot;fire&quot;/
+
+    html = render_submit(view, "padmap", %{"fire" => "zz"})
+    assert html =~ "zz"
+    assert Auth.padmap("alice") == %{fire: [:x], shield: [:y, {:axis, :left_trigger, :pos}]}
+
+    html = render_click(view, "padmap_reset", %{})
+    assert Auth.padmap("alice") == %{}
+    assert html =~ ~s(value="b right_bumper")
+    assert html =~ ~s(name="stick_thrust")
+
+    html = render_submit(view, "padmap", %{"aim" => "left_stick_xy", "stick_thrust" => "on"})
+
+    assert Auth.padmap("alice") == %{
+             aim: [{:stick, :left, push: [action: :thrust, beyond: 0.6, least: 0.3, gain: 1.4]}]
+           }
+
+    assert html =~ ~s(value="left_stick_xy+thrust")
+    assert html =~ ~s(name="stick_thrust" value="on" checked)
+    {:ok, _view, arena} = live(logged_in(conn), "/arena/webtest")
+    assert arena =~ ~s(&quot;push&quot;:)
+    assert arena =~ ~s(&quot;action&quot;:&quot;thrust&quot;)
+
+    pad = Cauldron2D.Input.Pad.new(ExPilot.Client.padmap(%{username: "alice"}))
+
+    light =
+      Cauldron2D.Input.Pad.handle(pad, %{type: :axis, device: 0, axis: :left_y, value: -0.5})
+
+    refute :thrust in Cauldron2D.Input.Pad.held(light)
+    assert Cauldron2D.Input.Pad.aim(light) != nil
+
+    hard =
+      Cauldron2D.Input.Pad.handle(light, %{type: :axis, device: 0, axis: :left_y, value: -0.9})
+
+    assert :thrust in Cauldron2D.Input.Pad.held(hard)
+    assert_in_delta Cauldron2D.Input.Pad.strength(hard).thrust, 1.0, 0.001
+
+    render_submit(view, "padmap", %{"aim" => "left_stick_xy+thrust"})
+    assert Auth.padmap("alice") == %{}
+  end
+
+  test "settings on a phone keep the stick's hand and tilt steering in the account, beside its sound",
+       %{conn: conn} do
+    {:ok, web, web_html} = live(logged_in(conn), "/settings")
+    refute web_html =~ ~s(name="tilt")
+    assert render(web) =~ "this browser"
+
+    {:ok, view, html} =
+      live(put_connect_params(logged_in(conn), %{"kind" => "touch"}), "/settings")
+
+    assert html =~ "this phone or tablet"
+    assert html =~ ~s(name="tilt")
+    assert html =~ ~s(name="side")
+
+    render_change(view, "controls", %{"side" => "right", "tilt" => "on", "invert" => "on"})
+    assert Auth.controls("alice", :touch) == %{side: :right, tilt: true, invert: true}
+    assert Auth.levels("alice", :touch) == %{sfx: 0.85, music: 0.35}
+    assert html =~ ~s(name="invert")
+
+    render_change(view, "controls", %{"side" => "left"})
+    assert Auth.controls("alice", :touch) == %{side: :left, tilt: false, invert: false}
+
+    render_submit(view, "save", %{"sfx" => "40", "music" => "0"})
+    assert Auth.levels("alice", :touch) == %{sfx: 0.4, music: 0.0}
+    assert Auth.controls("alice", :touch) == %{side: :left, tilt: false, invert: false}
   end
 
   test "a browser session's sound is 44.1 kHz stereo unless it asks for another format" do
@@ -327,7 +458,7 @@ defmodule ExPilot.WebTest do
         mode: :dogfight
       })
 
-    conn = get(build_conn(), "/api/leaders?period=all&metric=kills&arena=webtest")
+    conn = get(build_conn(), "/api/leaders?period=all&metric=kills&world=webtest")
 
     assert Enum.any?(
              Jason.decode!(conn.resp_body),
@@ -471,17 +602,42 @@ defmodule ExPilot.WebTest do
     assert %{ended: :withdrawn} = Enum.find(ExPilot.Duels.list(), &(&1.id == duel.id))
   end
 
+  test "a ship shape first seen in play sends the browser a sheet at a new address, so it fetches the new pixels" do
+    {:ok, socket} = connect(ExPilot.Web.UserSocket, %{"token" => Auth.token("alice")})
+    {:ok, _reply, _socket} = subscribe_and_join(socket, ExPilot.Web.ArenaChannel, "arena:webtest")
+    assert_push("sheet", %{url: first})
+    assert first == Assets.sheet_path()
+
+    ExPilot.Art.ship_shape("(SH: 15,0 -8,8 -4,0 -8,-8)(EN: -4,0)(MG: 15,0)", 3, 0)
+    assert_push("sheet", %{url: second, arts: arts}, 2_000)
+    assert second != first
+    assert second == Assets.sheet_path()
+    assert Enum.any?(arts, fn {name, _index} -> name =~ "ship" end)
+  end
+
   test "the touch script is served", %{conn: conn} do
     conn = get(conn, "/expilot.js")
     assert conn.status == 200
     assert conn.resp_body =~ "pointer: coarse"
   end
 
-  test "the sheet is served as a PNG", %{conn: conn} do
+  test "the controller script is served from the gamepad package", %{conn: conn} do
+    conn = get(conn, "/gamepad.js")
+    assert conn.status == 200
+    assert conn.resp_body =~ "Gamepad"
+  end
+
+  test "the sheet is served as a PNG, cached for a year by version and never without one", %{
+    conn: conn
+  } do
     conn = get(conn, "/atlas.png")
     assert conn.status == 200
     assert get_resp_header(conn, "content-type") |> hd() =~ "image/png"
     assert <<137, "PNG", _::binary>> = conn.resp_body
+    assert get_resp_header(conn, "cache-control") == ["no-cache"]
+
+    versioned = get(build_conn(), Assets.sheet_path())
+    assert get_resp_header(versioned, "cache-control") == ["public, max-age=31536000, immutable"]
   end
 
   test "settings keep the browser's levels under their own key, beside the terminal's, and the alias every client shows",
@@ -514,7 +670,8 @@ defmodule ExPilot.WebTest do
     assert socket.assigns.settings == %{sfx: 0.5, music: 0.1}
 
     {:ok, _reply, socket} = subscribe_and_join(socket, ExPilot.Web.ArenaChannel, "arena:webtest")
-    assert_push("sheet", %{url: "/atlas.png", tile: 16})
+    assert_push("sheet", %{url: url, tile: 16})
+    assert url == Assets.sheet_path()
     assert_push("map", %{width: 120, height: 120, wrap: true}, 2_000)
     assert_push("frame", %{focus: [_, _], movers: movers, hud: hud}, 2_000)
     assert Enum.any?(movers, fn [index, _, _] -> is_integer(index) end)
@@ -593,7 +750,7 @@ defmodule ExPilot.WebTest do
                 teams: [],
                 players: 0
               }
-            ]} = Cauldron2D.Net.Remote.arenas(url)
+            ]} = Cauldron2D.Net.Remote.worlds(url)
   end
 
   test "the client's arenas from a URL or a node carry worlds reached through the library's remote" do
@@ -607,9 +764,9 @@ defmodule ExPilot.WebTest do
                  {:via, Cauldron2D.Net.Remote.Worlds,
                   {:url, ^url, "t", "webtest", [topic: "arena"]}}
              }
-           ] = ExPilot.Client.arenas(%{source: {:url, url, "t"}})
+           ] = ExPilot.Client.worlds(%{source: {:url, url, "t"}})
 
-    assert [] = ExPilot.Client.arenas(%{source: {:url, "http://127.0.0.1:1", "t"}})
+    assert [] = ExPilot.Client.worlds(%{source: {:url, "http://127.0.0.1:1", "t"}})
 
     assert [
              %{
@@ -618,10 +775,10 @@ defmodule ExPilot.WebTest do
                map: "Dogfight... 6 bases",
                world: {:via, Cauldron2D.Net.Remote.Worlds, {:node, _, :webtest}}
              }
-           ] = ExPilot.Client.arenas(%{source: {:node, node()}})
+           ] = ExPilot.Client.worlds(%{source: {:node, node()}})
 
     assert %ExPilot.Map{} = Arenas.map("Dogfight... 6 bases")
-    assert [] = ExPilot.Client.arenas(%{source: {:node, :nobody@nowhere}})
+    assert [] = ExPilot.Client.worlds(%{source: {:node, :nobody@nowhere}})
   end
 
   test "the desktop's local link joins a world of this node through ExPilot.Client and gets the sheet, the map and frames" do

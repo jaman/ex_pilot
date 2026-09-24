@@ -12,7 +12,9 @@ defmodule ExPilot.Terminal do
   Title: `Enter` play here, `c` connect, `l` leaders, `h` host a server, `q` or `Esc`
   quit. Connect and host: `Tab` between the fields, `Enter` in a field or on the button
   does it, `Esc` title. Leaders: `←`/`→` period, `Tab` metric, `Esc` title. In the
-  client, its own keys; `Esc` from its lobby comes back here.
+  client, its own keys; `Esc` from its lobby comes back here. A game controller on this
+  machine plays too: `A` or `Start` on the title plays here, and in the client the
+  ship is on it as `ExPilot.Client.padmap/1` lays it out.
 
   ## Mount props
 
@@ -20,7 +22,7 @@ defmodule ExPilot.Terminal do
     * `:url`, `:node`, `:cookie` — what the connect form starts with
   """
 
-  use Drafter.App, key_release: true, cell_size: true, frame_pacing: :always
+  use Drafter.App, key_release: true, cell_size: true, controller: true, frame_pacing: :always
 
   alias Cauldron2D.Beacon
   alias Cauldron2D.Drafter.Client
@@ -306,6 +308,15 @@ defmodule ExPilot.Terminal do
   def handle_event({:key, :q, [:ctrl]}, _state), do: {:stop, :normal}
   def handle_event({:key, :c, [:ctrl]}, _state), do: {:stop, :normal}
 
+  def handle_event(
+        {:controller, %{type: :button, pressed: true, button: button}},
+        %{screen: :title} = state
+      )
+      when button in [:a, :start],
+      do: {:ok, play(state)}
+
+  def handle_event({:controller, _event}, state), do: {:noreply, state}
+
   def handle_event({:key, key}, %{screen: :title} = state) do
     case key do
       :enter -> {:ok, play(state)}
@@ -380,7 +391,7 @@ defmodule ExPilot.Terminal do
       Map.merge(state.props, %{
         game: ExPilot.Client,
         username: state.username,
-        start: :lobby,
+        start: {:lobby, title: false},
         source: state.source
       })
 

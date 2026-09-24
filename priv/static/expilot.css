@@ -237,7 +237,21 @@ kbd {
   padding: 1px 6px;
 }
 
-.arena { display: flex; gap: 14px; align-items: stretch; }
+.arena { display: flex; gap: 14px; align-items: stretch; position: relative; }
+.hud .hud-death, .hud .hud-cause {
+  position: absolute;
+  left: calc((100% - 314px) / 2);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+  z-index: 6;
+  font-family: var(--sans);
+  line-height: 1;
+  text-shadow: 0 2px 4px #000, 0 0 18px #000, 0 0 40px #000;
+}
+.hud .hud-death { top: 32%; font-size: 46px; font-weight: 800; letter-spacing: 0.22em; text-transform: uppercase; }
+.hud .hud-cause { top: calc(32% + 58px); font-size: 22px; font-weight: 600; letter-spacing: 0.06em; }
 .arena canvas {
   display: block;
   width: min(960px, 100%);
@@ -283,12 +297,45 @@ kbd {
 .summary h2.defeat { color: var(--red); }
 .summary .lines { font-family: var(--mono); color: var(--dim); margin-bottom: 20px; white-space: pre; }
 
-.settings { max-width: 640px; }
-.settings form { display: grid; gap: 22px; padding: 24px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; align-items: start; }
+.panel { padding: 20px 22px 22px; box-shadow: none; }
+.panel-wide { grid-column: 1 / -1; }
+.panel h2 { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-bottom: 14px; }
+.panel p { margin: 0; }
+.stack { display: grid; gap: 12px; }
+.field-row { display: flex; gap: 10px; align-items: end; }
+.field-row .field { flex: 1; }
+.hint { font-size: 13px; line-height: 1.45; color: var(--dim); }
+.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.check input { margin: 0; }
+.choice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 14px; }
+.pad-status { font-family: var(--mono); font-size: 13px; color: var(--cyan); }
+details.hint summary { cursor: pointer; color: var(--text); }
+details.hint ol { margin: 8px 0 6px; padding-left: 22px; display: grid; gap: 4px; }
+details.hint p { margin-top: 4px; }
+
+.keys-list { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; font-size: 13px; }
+.keys-list dt { color: var(--text); white-space: nowrap; }
+.keys-list dd { margin: 0; color: var(--dim); }
 .slider { display: grid; gap: 8px; }
 .slider label { display: flex; justify-content: space-between; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
 .slider label b { color: var(--text); font-family: var(--mono); }
 input[type="range"] { width: 100%; accent-color: var(--cyan); }
+input[type="radio"], input[type="checkbox"] { accent-color: var(--cyan); width: 18px; height: 18px; vertical-align: middle; }
+.bindings { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 22px; }
+.bindings h3 { grid-column: 1 / -1; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-top: 8px; }
+.bindings label { display: grid; grid-template-columns: 108px 1fr; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+.bindings input[type="text"] { font: 13px var(--mono); padding: 6px 10px; border-radius: 6px; }
+.presets { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.preset { display: grid; place-items: center; gap: 4px; padding: 8px 10px 6px; font: 12px var(--sans); letter-spacing: 0.06em; color: var(--dim); background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 8px; cursor: pointer; }
+.preset.current { color: var(--text); border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan) inset; }
+.shape-row { display: flex; align-items: center; gap: 12px; }
+.shape-row input { flex: 1; min-width: 0; font: 13px var(--mono); color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+svg.ship { flex: none; display: block; }
+svg.ship polygon { fill: #7fd6ff66; stroke: #7fd6ff; stroke-width: 1.2; stroke-linejoin: round; }
+.preset.current svg.ship polygon { fill: #ffb84d66; stroke: #ffb84d; }
 
 .keys-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .keys-table td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -322,7 +369,6 @@ input[type="range"] { width: 100%; accent-color: var(--cyan); }
 .sprite {
   width: 48px;
   height: 48px;
-  background-image: url("/atlas.png");
   background-repeat: no-repeat;
   image-rendering: pixelated;
 }
@@ -330,6 +376,9 @@ input[type="range"] { width: 100%; accent-color: var(--cyan); }
 @media (max-width: 900px) {
   .arena { flex-direction: column; }
   .hud { width: 100%; }
+  .hud .hud-death, .hud .hud-cause { left: 50%; }
+  .hud .hud-death { top: 22%; font-size: 36px; }
+  .hud .hud-cause { top: calc(22% + 46px); font-size: 18px; }
   .topbar { gap: 12px; padding: 10px 14px; }
   .page { padding: 20px 14px 40px; }
 }
@@ -366,6 +415,9 @@ html.touch .hud {
 }
 html.touch .hud > div { display: none; }
 html.touch .hud .hud-fuel, html.touch .hud .hud-score, html.touch .hud .hud-status, html.touch .hud .hud-watching, html.touch .hud .hud-race { display: block; }
+html.touch .hud .hud-death, html.touch .hud .hud-cause { display: block; position: fixed; left: 50%; }
+html.touch .hud .hud-death { top: 30%; font-size: 38px; }
+html.touch .hud .hud-cause { top: calc(30% + 48px); font-size: 19px; }
 html.touch .arena.open .hud {
   max-width: none;
   right: env(safe-area-inset-right, 0);
@@ -393,6 +445,8 @@ html.touch .stick {
 }
 html.touch .stick .knob { width: 64px; height: 64px; border-radius: 50%; background: #7fd6ff66; border: 2px solid #7fd6ffaa; }
 html.touch .stick.held { background: #ffffff22; }
+html.touch .arena.tilting .stick .knob { background: #ffb84d55; border-color: #ffb84daa; }
+html.touch .arena.tilting .stick::after { border-style: solid; border-color: #ffb84d55; }
 html.touch .stick::after { content: ""; position: absolute; inset: 27.5%; border-radius: 50%; border: 1px dashed #ffffff2e; pointer-events: none; }
 html.touch .arena.swapped .stick { left: auto; right: calc(20px + env(safe-area-inset-right, 0)); }
 html.touch .arena.swapped .buttons { right: auto; left: calc(20px + env(safe-area-inset-left, 0)); }

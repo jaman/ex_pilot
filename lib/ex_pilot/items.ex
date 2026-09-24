@@ -87,8 +87,9 @@ defmodule ExPilot.Items do
     autopilot: :initialautopilots
   ]
 
-  @fuel_pack 500.0
-  @tank_fuel 500.0
+  @fuel_pack 500
+  @fuel_pack_extra 511
+  @tank_fuel Ship.max_fuel() / 3
   @lifetime 90.0
   @reach 0.7
 
@@ -119,10 +120,18 @@ defmodule ExPilot.Items do
   @doc """
   Give `ship` what `kind` does.
 
-  A fuel pack fills the tank by 500; a tank adds 500 to the tank's capacity and fills it;
-  armour adds a layer that absorbs one shot; every other kind adds one to the ship's
-  count of it.
+  A fuel pack fills the tank by 500 to 1011, drawn from `rng` (500 without one); a tank
+  adds a third of a full tank to the tank's capacity and fills it; armour adds a layer
+  that absorbs one shot; every other kind adds one to the ship's count of it.
   """
+  @spec pick_up(Ship.t(), kind(), Rng.t()) :: {Ship.t(), Rng.t()}
+  def pick_up(%Ship{} = ship, :fuel, rng) do
+    {extra, rng} = Rng.between(rng, 0, @fuel_pack_extra)
+    {%{ship | fuel: min(ship.max_fuel, ship.fuel + @fuel_pack + extra)}, rng}
+  end
+
+  def pick_up(%Ship{} = ship, kind, rng), do: {pick_up(ship, kind), rng}
+
   @spec pick_up(Ship.t(), kind()) :: Ship.t()
   def pick_up(%Ship{} = ship, :fuel),
     do: %{ship | fuel: min(ship.max_fuel, ship.fuel + @fuel_pack)}

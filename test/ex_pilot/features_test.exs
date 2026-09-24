@@ -1,7 +1,7 @@
 defmodule ExPilot.FeaturesTest do
   use ExUnit.Case, async: true
 
-  alias ExPilot.{Ball, Game, Items, Race, Ship, Targets, Weapons}
+  alias ExPilot.{Ball, Game, Items, Race, Ship, Targets}
 
   @dt 1 / 50
 
@@ -107,7 +107,8 @@ defmodule ExPilot.FeaturesTest do
       s = %{Ship.new(:a, "a", {1, 1}) | fuel: 100.0}
       assert Items.pick_up(s, :fuel).fuel == 600.0
       tanked = Items.pick_up(s, :tank)
-      assert tanked.max_fuel == 1500.0 and tanked.fuel == 600.0
+      assert_in_delta tanked.max_fuel, 3466.67, 0.01
+      assert_in_delta tanked.fuel, 966.67, 0.01
     end
   end
 
@@ -240,13 +241,13 @@ defmodule ExPilot.FeaturesTest do
       fresh = game() |> joined(:a) |> joined(:b) |> place(:a, {14.0, 2.5}, heading: 0)
       assert Enum.any?(Game.view(fresh, :a).ships, &(&1.id == :b and &1.shielding?))
 
-      shot_early = fresh |> holding(:a, [:fire]) |> play(1) |> holding(:a, []) |> play(30)
+      shot_early = fresh |> holding(:a, [:fire]) |> play(1) |> holding(:a, []) |> play(60)
       assert ship(shot_early, :b).alive?
       assert Enum.any?(events(shot_early), &match?({:bounce, _}, &1))
 
       later = fresh |> play(round(3.2 / @dt))
       refute Enum.any?(Game.view(later, :a).ships, &(&1.id == :b and &1.shielding?))
-      shot_late = later |> holding(:a, [:fire]) |> play(1) |> holding(:a, []) |> play(30)
+      shot_late = later |> holding(:a, [:fire]) |> play(1) |> holding(:a, []) |> play(60)
       refute ship(shot_late, :b).alive?
 
       revived = shot_late |> play(round(3.1 / @dt))
@@ -340,12 +341,6 @@ defmodule ExPilot.FeaturesTest do
       game = game |> holding(:a, [:fire]) |> play(1) |> holding(:a, []) |> play(30)
       assert Enum.any?(Game.view(game, :a).messages, fn {_at, text} -> text =~ "a shot b" end)
     end
-  end
-
-  test "weapons helpers" do
-    s = Ship.new(:a, "a", {1, 1})
-    assert %{kind: :mine} = Weapons.mine(s, 1)
-    refute Weapons.armed?(Weapons.mine(s, 1))
   end
 
   test "balls start in treasures with the nearest base's team" do

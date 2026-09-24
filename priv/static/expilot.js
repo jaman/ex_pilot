@@ -21,6 +21,19 @@
     return Math.min(global.innerWidth, global.innerHeight) >= 700 ? 32 : 24;
   }
 
+  function askTilt() {
+    var Orientation = global.DeviceOrientationEvent;
+    if (!Orientation) return Promise.resolve("unsupported");
+    if (typeof Orientation.requestPermission !== "function") return Promise.resolve("granted");
+    return Orientation.requestPermission().then(function (state) { return state; }, function () { return "denied"; });
+  }
+
+  function touchTilt(el) {
+    if (el.dataset.tilt !== "on") return null;
+    return { range: 22, deadzone: 0.12, distance: 8, invert: el.dataset.tiltInvert === "on" };
+  }
+
+
   function touchZones(el) {
     var zones = [];
     var stick = el.querySelector(".stick");
@@ -41,15 +54,8 @@
       event.preventDefault();
       el.classList.toggle("open");
     });
-    var swap = el.querySelector(".swap");
-    var swapped = function () { try { return global.localStorage.getItem("expilot.touch.side") === "swapped"; } catch (error) { return false; } };
-    el.classList.toggle("swapped", swapped());
-    if (swap) swap.addEventListener("pointerdown", function (event) {
-      event.preventDefault();
-      var now = !el.classList.contains("swapped");
-      el.classList.toggle("swapped", now);
-      try { global.localStorage.setItem("expilot.touch.side", now ? "swapped" : "normal"); } catch (error) {}
-    });
+    el.classList.toggle("swapped", el.dataset.side === "right");
+    el.classList.toggle("tilting", el.dataset.tilt === "on");
     var full = el.querySelector(".full");
     if (full) full.addEventListener("pointerdown", function (event) {
       event.preventDefault();
@@ -87,9 +93,65 @@
     });
   }
 
+  function macOnChromeOrFirefox() {
+    var ua = global.navigator.userAgent || "";
+    var mac = /Mac/.test(global.navigator.platform || "") || /Macintosh/.test(ua);
+    var chrome = /Chrome\//.test(ua) && !/Edg\//.test(ua);
+    var firefox = /Firefox\//.test(ua);
+    return mac && (chrome || firefox);
+  }
+
+  function padHelp(found) {
+    if (!global.isSecureContext) return "The browser hands controllers only to pages on https or localhost — this page is on neither, so none can be seen.";
+    if (!global.Gamepad || !global.Gamepad.available()) return "This browser has no controller support.";
+    if (found) return "Click a row below and press a control on it to bind.";
+    var lines = ["Nothing seen yet: browsers keep a controller hidden until a button is pressed on it while this page is in front."];
+    if (macOnChromeOrFirefox()) lines.push("On a Mac, Chrome and Firefox see only controllers that show up as plain HID devices; the steps below get most of them seen.");
+    return lines.join(" ");
+  }
+
+  function padCapture(form) {
+    var status = form.querySelector("[data-pad-status]");
+    var help = form.querySelector("[data-pad-help]");
+    var macHelp = form.querySelector("[data-pad-mac]");
+    if (macHelp) macHelp.hidden = !macOnChromeOrFirefox();
+
+    var names = {};
+    var show = function () {
+      var seen = Object.keys(names).map(function (id) { return names[id]; });
+      if (status) status.textContent = seen.length ? "controller: " + seen.join(", ") : "looking for a controller — press a button on it with this page in front";
+      if (help) help.textContent = padHelp(seen.length > 0);
+    };
+    show();
+    if (!global.Gamepad || !global.Gamepad.available()) return null;
+    var focused = null;
+    var axes = {};
+    form.addEventListener("focusin", function (event) { if (event.target.tagName === "INPUT") focused = event.target; });
+    form.addEventListener("focusout", function () { focused = null; });
+    var add = function (word) {
+      if (!focused) return;
+      var words = focused.value.split(/\s+/).filter(function (w) { return w; });
+      if (words.indexOf(word) < 0) words.push(word);
+      focused.value = words.join(" ");
+    };
+    return global.Gamepad.watch(function (line) {
+      var words = line.split(" ");
+      if (words[0] === "device") { names[words[1]] = words.slice(2).join(" "); show(); }
+      if (words[0] === "gone") { delete names[words[1]]; show(); }
+      if (words[0] === "button" && words[3] === "1") add(words[2]);
+
+      if (words[0] === "axis") {
+        var value = parseFloat(words[3]);
+        var was = axes[words[2]] || 0;
+        axes[words[2]] = value;
+        if (Math.abs(value) >= 0.6 && Math.abs(was) < 0.6) add(words[2] + (value < 0 ? "-" : "+"));
+      }
+    });
+  }
+
   function leavePage() {
     document.documentElement.classList.remove("playing");
   }
 
-  global.ExPilot = { touch: touch, touchTile: touchTile, touchZones: touchZones, touchPage: touchPage, touchZoom: touchZoom, musicToggles: musicToggles, leavePage: leavePage };
+  global.ExPilot = { touch: touch, touchTile: touchTile, touchZones: touchZones, touchTilt: touchTilt, askTilt: askTilt, touchPage: touchPage, touchZoom: touchZoom, musicToggles: musicToggles, padCapture: padCapture, leavePage: leavePage };
 })(window);

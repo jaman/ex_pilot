@@ -38,12 +38,12 @@ defmodule ExPilot.TerminalTest do
     assert :ok ==
              DT.wait_for(ctx, fn c -> DT.screen_text(c) =~ "terminaltest" end, timeout: 3_000)
 
-    assert DT.screen_text(ctx) =~ "Arenas"
+    assert DT.screen_text(ctx) =~ "Worlds"
     DT.send_key(ctx, :enter)
     assert :ok == DT.wait_for(ctx, fn c -> DT.screen_text(c) =~ "fuel" end, timeout: 8_000)
     assert Arenas.humans(:terminaltest) == ["alice"]
     DT.send_key(ctx, :escape)
-    assert :ok == DT.wait_for(ctx, fn c -> DT.screen_text(c) =~ "Arenas" end, timeout: 3_000)
+    assert :ok == DT.wait_for(ctx, fn c -> DT.screen_text(c) =~ "Worlds" end, timeout: 3_000)
     DT.send_key(ctx, :escape)
 
     assert :ok ==
