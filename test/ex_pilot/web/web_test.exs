@@ -6,9 +6,11 @@ defmodule ExPilot.WebTest do
   import Phoenix.LiveViewTest
   import Plug.Conn, only: [get_session: 2, get_resp_header: 2]
 
+  alias Cauldron2D.Input.Pad
   alias Cauldron2D.Net.Link.Local
   alias Cauldron2D.Net.Link.Socket
   alias ExPilot.Arenas
+  alias ExPilot.Client
   alias ExPilot.Web.{Assets, Auth}
   alias ExPilot.Web.Endpoint
 
@@ -263,12 +265,12 @@ defmodule ExPilot.WebTest do
         do: assert(html =~ ~s(phx-value-name="#{name}"))
 
     assert Auth.shipshape("alice") == nil
-    refute Map.has_key?(ExPilot.Client.join_props(%{username: "alice", settings: %{}}), :shape)
+    refute Map.has_key?(Client.join_props(%{username: "alice", settings: %{}}), :shape)
 
     render_click(view, "preset", %{"name" => "dart"})
     dart = ExPilot.Shipshape.preset!("dart")
     assert Auth.shipshape("alice") == dart
-    assert %{shape: ^dart} = ExPilot.Client.join_props(%{username: "alice", settings: %{}})
+    assert %{shape: ^dart} = Client.join_props(%{username: "alice", settings: %{}})
 
     custom = "(SH: 14,0 -6,9 -9,0 -6,-9)(EN: -9,0)(MG: 14,0)"
     html = render_submit(view, "shipshape", %{"shape" => custom})
@@ -282,7 +284,7 @@ defmodule ExPilot.WebTest do
 
     render_submit(view, "shipshape", %{"shape" => ""})
     assert Auth.shipshape("alice") == nil
-    refute Map.has_key?(ExPilot.Client.join_props(%{username: "alice", settings: %{}}), :shape)
+    refute Map.has_key?(Client.join_props(%{username: "alice", settings: %{}}), :shape)
   end
 
   test "settings keep the controller's bindings in the account, the arena page hands them to the browser, and reset goes back to the default",
@@ -308,8 +310,8 @@ defmodule ExPilot.WebTest do
 
     assert html =~ "kept"
     assert Auth.padmap("alice") == %{fire: [:x], shield: [:y, {:axis, :left_trigger, :pos}]}
-    assert ExPilot.Client.padmap(%{username: "alice"}).fire == [:x]
-    assert ExPilot.Client.padmap(%{username: "alice"}).thrust == ExPilot.Padmap.default().thrust
+    assert Client.padmap(%{username: "alice"}).fire == [:x]
+    assert Client.padmap(%{username: "alice"}).thrust == ExPilot.Padmap.default().thrust
 
     {:ok, _view, arena} = live(logged_in(conn), "/arena/webtest")
     assert arena =~ ~r/&quot;x&quot;:\[[^\]]*&quot;fire&quot;/
@@ -335,19 +337,19 @@ defmodule ExPilot.WebTest do
     assert arena =~ ~s(&quot;push&quot;:)
     assert arena =~ ~s(&quot;action&quot;:&quot;thrust&quot;)
 
-    pad = Cauldron2D.Input.Pad.new(ExPilot.Client.padmap(%{username: "alice"}))
+    pad = Pad.new(Client.padmap(%{username: "alice"}))
 
     light =
-      Cauldron2D.Input.Pad.handle(pad, %{type: :axis, device: 0, axis: :left_y, value: -0.5})
+      Pad.handle(pad, %{type: :axis, device: 0, axis: :left_y, value: -0.5})
 
-    refute :thrust in Cauldron2D.Input.Pad.held(light)
-    assert Cauldron2D.Input.Pad.aim(light) != nil
+    refute :thrust in Pad.held(light)
+    assert Pad.aim(light) != nil
 
     hard =
-      Cauldron2D.Input.Pad.handle(light, %{type: :axis, device: 0, axis: :left_y, value: -0.9})
+      Pad.handle(light, %{type: :axis, device: 0, axis: :left_y, value: -0.9})
 
-    assert :thrust in Cauldron2D.Input.Pad.held(hard)
-    assert_in_delta Cauldron2D.Input.Pad.strength(hard).thrust, 1.0, 0.001
+    assert :thrust in Pad.held(hard)
+    assert_in_delta Pad.strength(hard).thrust, 1.0, 0.001
 
     render_submit(view, "padmap", %{"aim" => "left_stick_xy+thrust"})
     assert Auth.padmap("alice") == %{}
@@ -653,13 +655,13 @@ defmodule ExPilot.WebTest do
     assert render(view) =~ "Others see you as <strong>#{anonymous}</strong>"
 
     assert %{username: ^anonymous} =
-             ExPilot.Client.join_props(%{username: "alice", settings: %{}})
+             Client.join_props(%{username: "alice", settings: %{}})
 
     render_submit(view, "alias", %{"alias" => "Ace"})
     assert ExPilot.Alias.of("alice") == "Ace"
     assert render(view) =~ "Others see you as <strong>Ace</strong>"
-    assert %{username: "Ace"} = ExPilot.Client.join_props(%{username: "alice", settings: %{}})
-    assert ExPilot.Client.player_label("alice") == "Ace"
+    assert %{username: "Ace"} = Client.join_props(%{username: "alice", settings: %{}})
+    assert Client.player_label("alice") == "Ace"
 
     render_submit(view, "alias", %{"alias" => ""})
     assert ExPilot.Alias.of("alice") == anonymous
@@ -764,9 +766,9 @@ defmodule ExPilot.WebTest do
                  {:via, Cauldron2D.Net.Remote.Worlds,
                   {:url, ^url, "t", "webtest", [topic: "arena"]}}
              }
-           ] = ExPilot.Client.worlds(%{source: {:url, url, "t"}})
+           ] = Client.worlds(%{source: {:url, url, "t"}})
 
-    assert [] = ExPilot.Client.worlds(%{source: {:url, "http://127.0.0.1:1", "t"}})
+    assert [] = Client.worlds(%{source: {:url, "http://127.0.0.1:1", "t"}})
 
     assert [
              %{
@@ -775,10 +777,10 @@ defmodule ExPilot.WebTest do
                map: "Dogfight... 6 bases",
                world: {:via, Cauldron2D.Net.Remote.Worlds, {:node, _, :webtest}}
              }
-           ] = ExPilot.Client.worlds(%{source: {:node, node()}})
+           ] = Client.worlds(%{source: {:node, node()}})
 
     assert %ExPilot.Map{} = Arenas.map("Dogfight... 6 bases")
-    assert [] = ExPilot.Client.worlds(%{source: {:node, :nobody@nowhere}})
+    assert [] = Client.worlds(%{source: {:node, :nobody@nowhere}})
   end
 
   test "the desktop's local link joins a world of this node through ExPilot.Client and gets the sheet, the map and frames" do

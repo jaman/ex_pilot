@@ -1,7 +1,7 @@
 defmodule ExPilot.MixProject do
   use Mix.Project
 
-  @version "0.1.2"
+  @version "0.1.3"
   @source_url "https://github.com/jaman/ex_pilot"
   @description "An XPilot for the terminal, over ssh, in the browser and on the desktop, on Cauldron."
 
@@ -32,22 +32,22 @@ defmodule ExPilot.MixProject do
     [
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      family(:cauldron_2d, "~> 0.1.3", "../cauldron/cauldron_2d", []),
-      family(:cauldron_2d_drafter, "~> 0.1.3", "../cauldron/cauldron_2d_drafter", []),
-      family(:cauldron_2d_net, "~> 0.1.3", "../cauldron/cauldron_2d_net", []),
-      family(:cauldron_2d_wx, "~> 0.1.3", "../cauldron/cauldron_2d_wx", []),
+      family(:cauldron_2d, "~> 0.2.6", "../cauldron/cauldron_2d", []),
+      family(:cauldron_2d_drafter, "~> 0.2.6", "../cauldron/cauldron_2d_drafter", []),
+      family(:cauldron_2d_net, "~> 0.2.6", "../cauldron/cauldron_2d_net", []),
+      family(:cauldron_2d_wx, "~> 0.2.6", "../cauldron/cauldron_2d_wx", []),
       {:phoenix, "~> 1.8"},
       {:phoenix_live_view, "~> 1.2"},
       {:phoenix_html, "~> 4.2"},
       {:bandit, "~> 1.12"},
       {:jason, "~> 1.4"},
       {:lazy_html, ">= 0.1.0", only: :test},
-      family(:drafter, "~> 0.4.0", "../drafter", []),
-      family(:french_curve, "~> 0.1.4", "../french_curve", override: true),
-      family(:linocut, "~> 0.1.3", "../cauldron/linocut", []),
+      family(:drafter, "~> 0.5.4", "../drafter", []),
+      family(:french_curve, "~> 0.2.1", "../french_curve", override: true),
+      family(:linocut, "~> 0.2.6", "../cauldron/linocut", []),
       family(:gamepad, "~> 0.1.0", "../gamepad", []),
-      family(:tuning_fork, "~> 0.1.11", "../tuning_fork/tuning_fork", []),
-      family(:tuning_fork_speaker, "~> 0.1.11", "../tuning_fork/tuning_fork_speaker", [])
+      family(:tuning_fork, "~> 0.1.13", "../tuning_fork/tuning_fork", []),
+      family(:tuning_fork_speaker, "~> 0.1.13", "../tuning_fork/tuning_fork_speaker", [])
     ]
   end
 

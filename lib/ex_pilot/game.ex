@@ -1820,7 +1820,7 @@ defmodule ExPilot.Game do
     })
   end
 
-  defp epitaph_of(%{died_of: cause, died_at: at}, time)
+  defp epitaph_of(%{death: %{of: cause, at: at}}, time)
        when is_binary(cause) and is_number(at) and time - at < @respawn_after + @epitaph_lingers,
        do: cause
 

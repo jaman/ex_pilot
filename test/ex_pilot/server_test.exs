@@ -47,8 +47,23 @@ defmodule ExPilot.ServerTest do
   end
 
   test "the server does not start while another process holds the ledger", %{dir: dir} do
-    sleeper = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["30"])
-    {:os_pid, holder} = Port.info(sleeper, :os_pid)
+    sleeper =
+      Port.open({:spawn_executable, System.find_executable("erl")}, [
+        :binary,
+        args: [
+          "-noshell",
+          "-eval",
+          "io:format(\"~s~n\", [os:getpid()]), timer:sleep(30000), halt()."
+        ]
+      ])
+
+    holder =
+      receive do
+        {^sleeper, {:data, pid}} -> pid |> String.trim() |> String.to_integer()
+      after
+        10_000 -> flunk("the ledger holder VM did not start")
+      end
+
     held = Path.join(dir, "held_ledger.dets")
     File.write!(held <> ".lock", Integer.to_string(holder))
     previous = Application.get_env(:ex_pilot, :ledger)
@@ -217,8 +232,9 @@ defmodule ExPilot.ServerTest do
     server: server,
     dir: dir
   } do
+    accounts = Process.monitor(server.accounts)
     assert :ok == ExPilot.Server.stop(server)
-    refute Process.alive?(server.accounts)
+    assert_receive {:DOWN, ^accounts, :process, _pid, _reason}, 5_000
     assert {:error, _} = :gen_tcp.connect(~c"127.0.0.1", port, [], 1_000)
 
     http = 40_000 + :rand.uniform(900)

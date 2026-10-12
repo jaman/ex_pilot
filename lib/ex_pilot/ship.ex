@@ -39,8 +39,7 @@ defmodule ExPilot.Ship do
           shape: String.t() | nil,
           held_before: MapSet.t(atom()),
           watching: term() | nil,
-          died_of: String.t() | nil,
-          died_at: float() | nil
+          death: %{of: String.t() | nil, at: float() | nil}
         }
 
   @typedoc """
@@ -132,8 +131,7 @@ defmodule ExPilot.Ship do
             shape: nil,
             held_before: MapSet.new(),
             watching: nil,
-            died_of: nil,
-            died_at: nil
+            death: %{of: nil, at: nil}
 
   @doc "The number of headings a ship turns through."
   @spec headings() :: pos_integer()
@@ -269,7 +267,8 @@ defmodule ExPilot.Ship do
   @doc """
   Mark the ship dead, counting the death and starting the respawn clock. `of:` says what
   killed it, as the pilot reads it (`"shot by alice"`, `"hit a wall"`), and `at:` the
-  game time of the death; both stay as `died_of` and `died_at` through the respawn.
+  game time of the death; both stay in the ship's `death` map, as `:of` and `:at`,
+  through the respawn.
   """
   @spec die(t(), float(), of: String.t(), at: float()) :: t()
   def die(%__MODULE__{} = ship, respawn_after, death \\ []) do
@@ -289,8 +288,7 @@ defmodule ExPilot.Ship do
         thrusting?: false,
         shielding?: false,
         lives: spend_life(ship.lives),
-        died_of: Keyword.get(death, :of),
-        died_at: Keyword.get(death, :at)
+        death: %{of: Keyword.get(death, :of), at: Keyword.get(death, :at)}
     }
   end
 

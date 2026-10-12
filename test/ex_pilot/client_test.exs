@@ -3,6 +3,8 @@ defmodule ExPilot.ClientTest do
 
   alias Cauldron2D.Input.Pad
   alias ExPilot.Client
+  alias ExPilot.Web.ArenaLive
+  alias ExPilot.Wx.Keys
 
   test "the padmap binds the ship to a controller in the Xbox layout, every control to an action of the game's" do
     padmap = Client.padmap(%{username: "nobody"})
@@ -41,13 +43,13 @@ defmodule ExPilot.ClientTest do
     assert wasd.thrust == [:w, {:mouse, :right}]
     assert wasd.shield == [:left_shift, :s]
 
-    browser = ExPilot.Web.ArenaLive.keymap()
+    browser = ArenaLive.keymap()
     assert browser["KeyW"] == "thrust"
     assert browser["KeyS"] == "shield"
     assert browser["ShiftLeft"] == "shield"
     assert browser["ArrowUp"] == "thrust"
 
-    desktop = ExPilot.Wx.Keys.keymap()
+    desktop = Keys.keymap()
     assert desktop[?W] == :thrust
     assert desktop[?S] == :shield
   end

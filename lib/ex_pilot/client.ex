@@ -122,6 +122,16 @@ defmodule ExPilot.Client do
   def outcome(%{wire: _} = view), do: Link.World.outcome(view)
   def outcome(view), do: Game.outcome(view)
 
+  @doc """
+  The props a player joins a world with.
+
+  `:username` is the account's alias (`ExPilot.Alias.of/1`), `:shape` its shipshape when
+  the account or its shipshape file has one, and from the join's `:params`, `:spectate`
+  when `"spectate"` is `"1"`, `"true"` or `true`, and `:team` when `"team"` is given.
+
+      ExPilot.Client.join_props(%{username: "alice", params: %{"team" => "2"}})
+      #=> %{username: "Ace", team: "2"}
+  """
   @impl true
   def join_props(%{username: username} = props) do
     username
